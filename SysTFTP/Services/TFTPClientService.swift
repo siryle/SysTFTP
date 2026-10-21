@@ -35,7 +35,7 @@ public final class TFTPClientService {
         
         let host = NWEndpoint.Host(config.serverHost)
         guard let port = NWEndpoint.Port(rawValue: UInt16(config.serverPort)) else {
-            delegate?.tftpClientDidComplete(success: false, message: "Invalid server port: \(config.serverPort)")
+            delegate?.tftpClientDidComplete(success: false, message: "无效的服务器端口：\(config.serverPort)")
             return
         }
         
@@ -47,14 +47,14 @@ public final class TFTPClientService {
             guard let self = self else { return }
             switch state {
             case .ready:
-                self.delegate?.tftpClientDidLog("Connected to TFTP server \(config.serverHost):\(config.serverPort)", isError: false)
+                self.delegate?.tftpClientDidLog("已连接到 TFTP 服务器 \(config.serverHost):\(config.serverPort)", isError: false)
                 if config.isUpload {
                     self.performUpload(config: config)
                 } else {
                     self.performDownload(config: config)
                 }
             case .failed(let error):
-                self.delegate?.tftpClientDidComplete(success: false, message: "Connection error: \(error.localizedDescription)")
+                self.delegate?.tftpClientDidComplete(success: false, message: "连接错误：\(error.localizedDescription)")
             default:
                 break
             }
@@ -96,11 +96,11 @@ public final class TFTPClientService {
             appendOption(to: &packet, name: "tsize", value: "0")
         }
         
-        delegate?.tftpClientDidLog("Sending RRQ for '\(config.remoteFilePath)'...", isError: false)
+        delegate?.tftpClientDidLog("正在请求下载 '\(config.remoteFilePath)'（RRQ）…", isError: false)
         
         connection?.send(content: packet, completion: .contentProcessed { [weak self] error in
             if let error = error {
-                self?.delegate?.tftpClientDidComplete(success: false, message: "Send RRQ failed: \(error.localizedDescription)")
+                self?.delegate?.tftpClientDidComplete(success: false, message: "发送下载请求（RRQ）失败：\(error.localizedDescription)")
                 return
             }
             self?.receiveNextPacket(isUpload: false)
@@ -110,7 +110,7 @@ public final class TFTPClientService {
     private func performUpload(config: TFTPClientConfig) {
         let fileURL = URL(fileURLWithPath: config.localFilePath)
         guard let data = try? Data(contentsOf: fileURL) else {
-            delegate?.tftpClientDidComplete(success: false, message: "Cannot read local file: \(config.localFilePath)")
+            delegate?.tftpClientDidComplete(success: false, message: "无法读取本地文件：\(config.localFilePath)")
             return
         }
         self.fileData = data
@@ -137,11 +137,11 @@ public final class TFTPClientService {
             appendOption(to: &packet, name: "tsize", value: "\(data.count)")
         }
         
-        delegate?.tftpClientDidLog("Sending WRQ for '\(config.remoteFilePath)' (\(data.count) bytes)...", isError: false)
+        delegate?.tftpClientDidLog("正在请求上传 '\(config.remoteFilePath)'（WRQ，共 \(data.count) 字节）…", isError: false)
         
         connection?.send(content: packet, completion: .contentProcessed { [weak self] error in
             if let error = error {
-                self?.delegate?.tftpClientDidComplete(success: false, message: "Send WRQ failed: \(error.localizedDescription)")
+                self?.delegate?.tftpClientDidComplete(success: false, message: "发送上传请求（WRQ）失败：\(error.localizedDescription)")
                 return
             }
             self?.receiveNextPacket(isUpload: true)
@@ -164,7 +164,7 @@ public final class TFTPClientService {
             guard let self = self, !self.isCancelled else { return }
             
             if let error = error {
-                self.delegate?.tftpClientDidComplete(success: false, message: "Receive error: \(error.localizedDescription)")
+                self.delegate?.tftpClientDidComplete(success: false, message: "接收错误：\(error.localizedDescription)")
                 return
             }
             
@@ -182,12 +182,12 @@ public final class TFTPClientService {
                 self.handleIncomingAck(data: data)
             case 5: // ERROR
                 let msg = self.parseErrorMessage(data: data)
-                self.delegate?.tftpClientDidComplete(success: false, message: "Server error: \(msg)")
+                self.delegate?.tftpClientDidComplete(success: false, message: "服务器错误：\(msg)")
                 self.cancel()
             case 6: // OACK (Option Acknowledgement)
                 self.handleOack(data: data, isUpload: isUpload)
             default:
-                self.delegate?.tftpClientDidComplete(success: false, message: "Unexpected opcode \(opcode)")
+                self.delegate?.tftpClientDidComplete(success: false, message: "意外的操作码：\(opcode)")
             }
         }
     }
@@ -200,7 +200,7 @@ public final class TFTPClientService {
         if let tsz = options["tsize"], let t = Int64(tsz) {
             self.totalBytes = t
         }
-        delegate?.tftpClientDidLog("Server accepted options: \(options)", isError: false)
+        delegate?.tftpClientDidLog("服务器已接受协商选项：\(options)", isError: false)
         
         if isUpload {
             currentBlock = 1
@@ -231,12 +231,12 @@ public final class TFTPClientService {
                 if let url = localFileURL {
                     do {
                         try fileData.write(to: url)
-                        delegate?.tftpClientDidComplete(success: true, message: "Download completed successfully: \(bytesTransferred) bytes saved to \(url.lastPathComponent)")
+                        delegate?.tftpClientDidComplete(success: true, message: "下载完成：已将 \(bytesTransferred) 字节保存至 \(url.lastPathComponent)")
                     } catch {
-                        delegate?.tftpClientDidComplete(success: false, message: "Failed saving file to disk: \(error.localizedDescription)")
+                        delegate?.tftpClientDidComplete(success: false, message: "文件保存到磁盘失败：\(error.localizedDescription)")
                     }
                 } else {
-                    delegate?.tftpClientDidComplete(success: true, message: "Download completed (\(bytesTransferred) bytes)")
+                    delegate?.tftpClientDidComplete(success: true, message: "下载完成（\(bytesTransferred) 字节）")
                 }
                 cancel()
                 return
@@ -264,7 +264,7 @@ public final class TFTPClientService {
             
             let offset = Int(currentBlock - 1) * blksize
             if offset + blksize >= fileData.count {
-                delegate?.tftpClientDidComplete(success: true, message: "Upload completed successfully (\(bytesTransferred) bytes sent)")
+                delegate?.tftpClientDidComplete(success: true, message: "上传完成（已发送 \(bytesTransferred) 字节）")
                 cancel()
                 return
             }
@@ -286,7 +286,7 @@ public final class TFTPClientService {
         
         conn.send(content: packet, completion: .contentProcessed { [weak self] error in
             if let error = error {
-                self?.delegate?.tftpClientDidComplete(success: false, message: "Send DATA failed: \(error.localizedDescription)")
+                self?.delegate?.tftpClientDidComplete(success: false, message: "发送 DATA 失败：\(error.localizedDescription)")
                 return
             }
             self?.receiveNextPacket(isUpload: true)
@@ -333,7 +333,7 @@ public final class TFTPClientService {
     }
     
     private func parseErrorMessage(data: Data) -> String {
-        guard data.count > 4 else { return "Unknown error" }
-        return String(data: data.subdata(in: 4..<data.count), encoding: .utf8) ?? "TFTP Error \(data[2])\(data[3])"
+        guard data.count > 4 else { return "未知错误" }
+        return String(data: data.subdata(in: 4..<data.count), encoding: .utf8) ?? "TFTP 错误 \(data[2])\(data[3])"
     }
 }

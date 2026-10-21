@@ -57,6 +57,34 @@ public enum SyslogFacility: Int, Codable, CaseIterable, Identifiable {
         case .local7: return "local7 (23)"
         }
     }
+    public var displayName: String {
+        switch self {
+        case .kern: return "内核 (0)"
+        case .user: return "用户 (1)"
+        case .mail: return "邮件 (2)"
+        case .daemon: return "系统服务 (3)"
+        case .auth: return "身份认证 (4)"
+        case .syslog: return "日志服务 (5)"
+        case .lpr: return "打印服务 (6)"
+        case .news: return "新闻服务 (7)"
+        case .uucp: return "UUCP (8)"
+        case .cron: return "计划任务 (9)"
+        case .authpriv: return "私有认证 (10)"
+        case .ftp: return "FTP (11)"
+        case .ntp: return "NTP (12)"
+        case .logAudit: return "日志审计 (13)"
+        case .logAlert: return "日志警报 (14)"
+        case .clockDaemon: return "时钟服务 (15)"
+        case .local0: return "本地 0 (16)"
+        case .local1: return "本地 1 (17)"
+        case .local2: return "本地 2 (18)"
+        case .local3: return "本地 3 (19)"
+        case .local4: return "本地 4 (20)"
+        case .local5: return "本地 5 (21)"
+        case .local6: return "本地 6 (22)"
+        case .local7: return "本地 7 (23)"
+        }
+    }
 }
 
 public enum SyslogSeverity: Int, Codable, CaseIterable, Identifiable, Comparable {
@@ -88,6 +116,19 @@ public enum SyslogSeverity: Int, Codable, CaseIterable, Identifiable, Comparable
         }
     }
     
+    public var displayName: String {
+        switch self {
+        case .emergency: return "紧急 (0)"
+        case .alert: return "警报 (1)"
+        case .critical: return "严重 (2)"
+        case .error: return "错误 (3)"
+        case .warning: return "警告 (4)"
+        case .notice: return "通知 (5)"
+        case .informational: return "信息 (6)"
+        case .debug: return "调试 (7)"
+        }
+    }
+
     public var color: Color {
         switch self {
         case .emergency, .alert:

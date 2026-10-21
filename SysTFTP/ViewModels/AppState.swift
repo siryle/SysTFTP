@@ -11,6 +11,17 @@ public enum AppNavigationItem: String, CaseIterable, Identifiable {
     case settings = "Settings"
     
     public var id: String { rawValue }
+
+    public var displayName: String {
+        switch self {
+        case .overview: return "概览"
+        case .tftpServer: return "TFTP 服务器"
+        case .tftpClient: return "TFTP 客户端"
+        case .ftpServer: return "FTP 服务器"
+        case .syslogServer: return "Syslog 日志服务器"
+        case .settings: return "设置"
+        }
+    }
     
     public var icon: String {
         switch self {
@@ -59,7 +70,7 @@ public final class AppState: ObservableObject {
     @Published public var clientTransferredBytes: Int64 = 0
     @Published public var clientTotalBytes: Int64? = nil
     @Published public var clientSpeedString: String = "0 KB/s"
-    @Published public var clientStatusMessage: String = "Ready"
+    @Published public var clientStatusMessage: String = "就绪"
     
     // Background Services
     public let tftpServerService = TFTPServerService()
@@ -92,7 +103,7 @@ public final class AppState: ObservableObject {
             do {
                 try tftpServerService.start()
             } catch {
-                appendTFTPLog("Failed to start TFTP Server: \(error.localizedDescription)")
+                appendTFTPLog("TFTP 服务启动失败：\(error.localizedDescription)")
             }
         }
     }
@@ -106,7 +117,7 @@ public final class AppState: ObservableObject {
             do {
                 try ftpServerService.start()
             } catch {
-                appendFTPLog("Failed to start FTP Server: \(error.localizedDescription)")
+                appendFTPLog("FTP 服务启动失败：\(error.localizedDescription)")
             }
         }
     }
@@ -120,7 +131,7 @@ public final class AppState: ObservableObject {
             do {
                 try syslogServerService.start()
             } catch {
-                appendGeneralLog("Failed to start Syslog Server: \(error.localizedDescription)")
+                appendGeneralLog("Syslog 服务启动失败：\(error.localizedDescription)")
             }
         }
     }
@@ -143,14 +154,14 @@ public final class AppState: ObservableObject {
         isClientTransferring = true
         clientTransferProgress = 0.0
         clientTransferredBytes = 0
-        clientStatusMessage = "Connecting..."
+        clientStatusMessage = "正在连接…"
         tftpClientService.startTransfer(config: tftpClientConfig)
     }
     
     public func cancelClientTransfer() {
         tftpClientService.cancel()
         isClientTransferring = false
-        clientStatusMessage = "Cancelled"
+        clientStatusMessage = "已取消"
     }
     
     // MARK: - Log Helpers
@@ -231,7 +242,7 @@ extension AppState: TFTPClientDelegate {
             } else {
                 self.clientSpeedString = String(format: "%.1f KB/s", speedBytesPerSec / 1024)
             }
-            self.clientStatusMessage = "Transferring: \(self.clientSpeedString)"
+            self.clientStatusMessage = "正在传输：\(self.clientSpeedString)"
         }
     }
     

@@ -37,7 +37,7 @@ public final class TFTPServerService {
         parameters.allowLocalEndpointReuse = true
         
         guard let port = NWEndpoint.Port(rawValue: UInt16(config.port)) else {
-            throw NSError(domain: "TFTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid port number: \(config.port)"])
+            throw NSError(domain: "TFTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效端口号：\(config.port)"])
         }
         
         let newListener = try NWListener(using: parameters, on: port)
@@ -46,10 +46,10 @@ public final class TFTPServerService {
             guard let self = self else { return }
             switch state {
             case .ready:
-                self.delegate?.tftpServerDidLog("TFTP Server listening on UDP port \(self.config.port), root: \(self.config.rootDirectory)", isError: false)
+                self.delegate?.tftpServerDidLog("TFTP 服务正在监听 UDP 端口 \(self.config.port)，根目录：\(self.config.rootDirectory)", isError: false)
                 self.delegate?.tftpServerStatusChanged(isRunning: true, port: self.config.port)
             case .failed(let error):
-                self.delegate?.tftpServerDidLog("TFTP Server failed: \(error.localizedDescription) (Port \(self.config.port) may require root/sudo or is in use)", isError: true)
+                self.delegate?.tftpServerDidLog("TFTP 服务启动失败：\(error.localizedDescription)（端口 \(self.config.port) 可能需要管理员权限或已被占用）", isError: true)
                 self.delegate?.tftpServerStatusChanged(isRunning: false, port: self.config.port)
             case .cancelled:
                 self.delegate?.tftpServerStatusChanged(isRunning: false, port: self.config.port)
@@ -77,7 +77,7 @@ public final class TFTPServerService {
         activeSessions.removeAll()
         sessionLock.unlock()
         
-        delegate?.tftpServerDidLog("TFTP Server stopped.", isError: false)
+        delegate?.tftpServerDidLog("TFTP 服务已停止。", isError: false)
         delegate?.tftpServerStatusChanged(isRunning: false, port: config.port)
     }
     
@@ -91,7 +91,7 @@ public final class TFTPServerService {
             guard let self = self else { return }
             
             if let error = error {
-                self.delegate?.tftpServerDidLog("TFTP receive error: \(error.localizedDescription)", isError: true)
+                self.delegate?.tftpServerDidLog("TFTP 接收错误：\(error.localizedDescription)", isError: true)
                 connection.cancel()
                 return
             }
@@ -108,7 +108,7 @@ public final class TFTPServerService {
         guard data.count >= 2 else { return }
         let opcode = UInt16(data[0]) << 8 | UInt16(data[1])
         
-        var clientIP = "Unknown"
+        var clientIP = "未知"
         var clientPort: UInt16 = 0
         if case .hostPort(let host, let port) = connection.endpoint {
             clientIP = "\(host)"
@@ -133,7 +133,7 @@ public final class TFTPServerService {
             session?.handleAckPacket(data: data)
         case 5: // ERROR
             let errorMsg = parseErrorMessage(data: data)
-            delegate?.tftpServerDidLog("TFTP Error received from \(sessionKey): \(errorMsg)", isError: true)
+            delegate?.tftpServerDidLog("收到来自 \(sessionKey) 的 TFTP 错误：\(errorMsg)", isError: true)
             sessionLock.lock()
             activeSessions.removeValue(forKey: sessionKey)?.cancel()
             sessionLock.unlock()
@@ -144,12 +144,12 @@ public final class TFTPServerService {
     
     private func handleRRQ(data: Data, clientIP: String, clientPort: UInt16, connection: NWConnection, sessionKey: String) {
         let (filename, mode, options) = parseRequest(data: data)
-        delegate?.tftpServerDidLog("TFTP RRQ: '\(filename)' from \(clientIP):\(clientPort), mode=\(mode), options=\(options)", isError: false)
+        delegate?.tftpServerDidLog("TFTP 下载请求（RRQ）：'\(filename)'，客户端 \(clientIP):\(clientPort)，模式=\(mode)，选项=\(options)", isError: false)
         
         let safePath = resolveSafePath(filename: filename)
         guard let fileURL = safePath, FileManager.default.fileExists(atPath: fileURL.path) else {
             sendError(connection: connection, code: 1, message: "File not found: \(filename)")
-            delegate?.tftpServerDidLog("TFTP File not found: \(filename)", isError: true)
+            delegate?.tftpServerDidLog("TFTP 文件不存在：\(filename)", isError: true)
             return
         }
         
@@ -158,7 +158,7 @@ public final class TFTPServerService {
             return
         }
         
-        var transferItem = TFTPTransferItem(
+        let transferItem = TFTPTransferItem(
             filename: filename,
             clientIP: clientIP,
             clientPort: clientPort,
@@ -188,7 +188,7 @@ public final class TFTPServerService {
                 self?.activeSessions.removeValue(forKey: sessionKey)
                 self?.sessionLock.unlock()
                 self?.delegate?.tftpServerTransferUpdated(item)
-                self?.delegate?.tftpServerDidLog("TFTP Download completed: \(item.filename) to \(item.clientIP) (\(item.bytesTransferred) bytes)", isError: false)
+                self?.delegate?.tftpServerDidLog("TFTP 下载完成：\(item.filename) → \(item.clientIP)（\(item.bytesTransferred) 字节）", isError: false)
             }
         )
         
@@ -201,7 +201,7 @@ public final class TFTPServerService {
     
     private func handleWRQ(data: Data, clientIP: String, clientPort: UInt16, connection: NWConnection, sessionKey: String) {
         let (filename, mode, options) = parseRequest(data: data)
-        delegate?.tftpServerDidLog("TFTP WRQ: '\(filename)' from \(clientIP):\(clientPort), mode=\(mode), options=\(options)", isError: false)
+        delegate?.tftpServerDidLog("TFTP 上传请求（WRQ）：'\(filename)'，客户端 \(clientIP):\(clientPort)，模式=\(mode)，选项=\(options)", isError: false)
         
         guard let fileURL = resolveSafePath(filename: filename) else {
             sendError(connection: connection, code: 2, message: "Access violation / Invalid filename path")
@@ -210,7 +210,7 @@ public final class TFTPServerService {
         
         if FileManager.default.fileExists(atPath: fileURL.path) && !config.allowOverwrite {
             sendError(connection: connection, code: 6, message: "File already exists and overwrite is disabled")
-            delegate?.tftpServerDidLog("TFTP Overwrite prevented: \(filename)", isError: true)
+            delegate?.tftpServerDidLog("TFTP 已阻止覆盖文件：\(filename)", isError: true)
             return
         }
         
@@ -240,7 +240,7 @@ public final class TFTPServerService {
                 self?.activeSessions.removeValue(forKey: sessionKey)
                 self?.sessionLock.unlock()
                 self?.delegate?.tftpServerTransferUpdated(item)
-                self?.delegate?.tftpServerDidLog("TFTP Upload completed: \(item.filename) from \(item.clientIP) (\(item.bytesTransferred) bytes)", isError: false)
+                self?.delegate?.tftpServerDidLog("TFTP 上传完成：\(item.filename) ← \(item.clientIP)（\(item.bytesTransferred) 字节）", isError: false)
             }
         )
         
@@ -299,9 +299,9 @@ public final class TFTPServerService {
     }
     
     private func parseErrorMessage(data: Data) -> String {
-        guard data.count > 4 else { return "Unknown error" }
+        guard data.count > 4 else { return "未知错误" }
         let msgData = data.subdata(in: 4..<data.count)
-        return String(data: msgData, encoding: .utf8) ?? "TFTP Error code \(data[2])\(data[3])"
+        return String(data: msgData, encoding: .utf8) ?? "TFTP 错误代码 \(data[2])\(data[3])"
     }
     
     private func sendError(connection: NWConnection, code: UInt16, message: String) {
@@ -402,7 +402,7 @@ private final class TFTPSession {
         
         connection.send(content: oack, completion: .contentProcessed { [weak self] error in
             if error != nil {
-                self?.fail(message: "Failed to send OACK")
+                self?.fail(message: "发送 OACK 失败")
             }
         })
     }
@@ -465,7 +465,7 @@ private final class TFTPSession {
                     try fileData.write(to: fileURL)
                     finishSuccess()
                 } catch {
-                    fail(message: "Error saving file: \(error.localizedDescription)")
+                    fail(message: "保存文件失败：\(error.localizedDescription)")
                 }
             }
         } else if blockNum == currentBlock {
@@ -490,7 +490,7 @@ private final class TFTPSession {
         
         connection.send(content: packet, completion: .contentProcessed { [weak self] error in
             if let error = error {
-                self?.fail(message: "Send DATA failed: \(error.localizedDescription)")
+                self?.fail(message: "发送 DATA 失败：\(error.localizedDescription)")
             }
         })
     }
@@ -499,7 +499,7 @@ private final class TFTPSession {
         let ack = Data([0x00, 0x04, UInt8(blockNum >> 8), UInt8(blockNum & 0xFF)])
         connection.send(content: ack, completion: .contentProcessed { [weak self] error in
             if let error = error {
-                self?.fail(message: "Send ACK failed: \(error.localizedDescription)")
+                self?.fail(message: "发送 ACK 失败：\(error.localizedDescription)")
             }
         })
     }

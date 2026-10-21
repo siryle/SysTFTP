@@ -36,7 +36,7 @@ public final class SyslogServerService {
         parameters.allowLocalEndpointReuse = true
         
         guard let port = NWEndpoint.Port(rawValue: UInt16(config.port)) else {
-            throw NSError(domain: "SyslogServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid Syslog port: \(config.port)"])
+            throw NSError(domain: "SyslogServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效的 Syslog 端口：\(config.port)"])
         }
         
         let newListener = try NWListener(using: parameters, on: port)
@@ -45,10 +45,10 @@ public final class SyslogServerService {
             guard let self = self else { return }
             switch state {
             case .ready:
-                self.delegate?.syslogServerDidLog("Syslog Server listening on UDP port \(self.config.port)", isError: false)
+                self.delegate?.syslogServerDidLog("Syslog 服务正在监听 UDP 端口 \(self.config.port)", isError: false)
                 self.delegate?.syslogServerStatusChanged(isRunning: true, port: self.config.port)
             case .failed(let error):
-                self.delegate?.syslogServerDidLog("Syslog Server error: \(error.localizedDescription) (Port \(self.config.port) may require root/sudo)", isError: true)
+                self.delegate?.syslogServerDidLog("Syslog 服务错误：\(error.localizedDescription)（端口 \(self.config.port) 可能需要管理员权限）", isError: true)
                 self.delegate?.syslogServerStatusChanged(isRunning: false, port: self.config.port)
             case .cancelled:
                 self.delegate?.syslogServerStatusChanged(isRunning: false, port: self.config.port)
@@ -72,7 +72,7 @@ public final class SyslogServerService {
         try? currentLogFileHandle?.close()
         currentLogFileHandle = nil
         
-        delegate?.syslogServerDidLog("Syslog Server stopped.", isError: false)
+        delegate?.syslogServerDidLog("Syslog 服务已停止。", isError: false)
         delegate?.syslogServerStatusChanged(isRunning: false, port: config.port)
     }
     
@@ -86,7 +86,7 @@ public final class SyslogServerService {
             guard let self = self else { return }
             
             if let error = error {
-                self.delegate?.syslogServerDidLog("Syslog receive error: \(error.localizedDescription)", isError: true)
+                self.delegate?.syslogServerDidLog("Syslog 接收错误：\(error.localizedDescription)", isError: true)
                 connection.cancel()
                 return
             }
@@ -95,7 +95,7 @@ public final class SyslogServerService {
                 return
             }
             
-            var clientIP = "Unknown"
+            var clientIP = "未知"
             if case .hostPort(let host, _) = connection.endpoint {
                 clientIP = "\(host)"
             }

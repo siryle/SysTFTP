@@ -15,8 +15,10 @@ public struct MainView: View {
                             .foregroundColor(iconColor(for: item))
                             .frame(width: 22)
                         
-                        Text(item.rawValue)
+                        Text(item.displayName)
                             .font(.system(size: 13, weight: .medium))
+                            .lineLimit(1)
+                            .layoutPriority(1)
                         
                         Spacer()
                         
@@ -31,12 +33,12 @@ public struct MainView: View {
                             Circle().fill(Color.blue).frame(width: 7, height: 7)
                         }
                     }
-                    .padding(.vertical, 3)
+                    .padding(.vertical, 6)
                 }
             }
             .navigationTitle("SysTFTP")
             .listStyle(.sidebar)
-            .frame(minWidth: 190, idealWidth: 210)
+            .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 260)
         } detail: {
             Group {
                 switch appState.selectedItem {
@@ -54,7 +56,7 @@ public struct MainView: View {
                     SettingsView()
                 }
             }
-            .frame(minWidth: 700, minHeight: 520)
+            .frame(minWidth: 680, minHeight: 520)
             .toolbar {
                 ToolbarItem(placement: .automatic) {
                     NetworkBadgeView()
@@ -70,10 +72,10 @@ public struct MainView: View {
                         }
                     }) {
                         let anyRunning = appState.isTFTPServerRunning || appState.isFTPServerRunning || appState.isSyslogServerRunning
-                        Label(anyRunning ? "Stop All Daemons" : "Start All Daemons", systemImage: anyRunning ? "stop.circle.fill" : "play.circle.fill")
+                        Label(anyRunning ? "停止全部服务" : "启动全部服务", systemImage: anyRunning ? "stop.circle.fill" : "play.circle.fill")
                             .foregroundColor(anyRunning ? .red : .green)
                     }
-                    .help("Quick toggle for TFTP, FTP and Syslog servers")
+                    .help("快速启停 TFTP、FTP 和 Syslog 服务")
                 }
             }
         }

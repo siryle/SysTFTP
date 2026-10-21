@@ -1,0 +1,107 @@
+name: Publish macOS DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing version tag, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the version tag
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the release version
+        id: version
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo "Invalid version tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
+          version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' SysTFTP/Resources/Info.plist)"
+          tag_version="${RELEASE_TAG#v}"
+          if [[ "${tag_version%%-*}" != "$version" ]]; then
+            echo "Tag $RELEASE_TAG does not match app version $version" >&2
+            exit 1
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "dmg=build/SysTFTP-macOS-$version.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/dmg-requirements.txt
+
+      - name: Install DMG packaging tools
+        run: python -m pip install -r scripts/dmg-requirements.txt
+
+      - name: Build and verify the Universal DMG
+        env:
+          DMG_LAYOUT: headless
+          DMG_PATH: ${{ steps.version.outputs.dmg }}
+        run: |
+          bash scripts/build_dmg.sh
+          lipo build/SysTFTP.app/Contents/MacOS/SysTFTP -verify_arch arm64 x86_64
+          codesign --verify --deep --strict build/SysTFTP.app
+          cd build
+          shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "$DMG_PATH").sha256"
+
+      - name: Keep a copy of the installer
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: SysTFTP-${{ steps.version.outputs.tag }}-macOS
+          path: |
+            ${{ steps.version.outputs.dmg }}
+            ${{ steps.version.outputs.dmg }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          DMG_PATH: ${{ steps.version.outputs.dmg }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$DMG_PATH" "$DMG_PATH.sha256" --clobber
+          else
+            args=(--verify-tag --title "SysTFTP $RELEASE_TAG")
+            if [[ "$RELEASE_TAG" == *-* ]]; then
+              args+=(--prerelease)
+            fi
+            notes="docs/releases/$RELEASE_TAG.md"
+            if [[ -f "$notes" ]]; then
+              args+=(--notes-file "$notes")
+            else
+              args+=(--generate-notes)
+            fi
+            gh release create "$RELEASE_TAG" "$DMG_PATH" "$DMG_PATH.sha256" "${args[@]}"
+          fi

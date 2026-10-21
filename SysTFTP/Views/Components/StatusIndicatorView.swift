@@ -39,54 +39,62 @@ public struct StatusIndicatorView: View {
 public struct NetworkBadgeView: View {
     @ObservedObject var networkMonitor = NetworkMonitorService.shared
     @State private var copiedMessage: String?
-    
+
     public init() {}
-    
+
+    private var primaryInterface: NetworkInterfaceInfo? {
+        networkMonitor.interfaces.first(where: { !$0.isLoopback }) ?? networkMonitor.interfaces.first
+    }
+
     public var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "network")
-                .foregroundColor(.accentColor)
-            
-            Text("Local IP:")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(.secondary)
-            
-            if networkMonitor.interfaces.isEmpty {
-                Text("Detecting...")
-                    .font(.system(size: 12))
-            } else {
-                ForEach(networkMonitor.interfaces.filter { !$0.isLoopback }.prefix(2)) { iface in
-                    Button(action: {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(iface.ipAddress, forType: .string)
-                        copiedMessage = iface.ipAddress
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                            copiedMessage = nil
-                        }
-                    }) {
-                        HStack(spacing: 4) {
-                            Text(iface.name)
-                                .font(.system(size: 11, weight: .bold))
-                                .foregroundColor(.secondary)
-                            Text(iface.ipAddress)
-                                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            Image(systemName: copiedMessage == iface.ipAddress ? "checkmark" : "doc.on.doc")
-                                .font(.system(size: 10))
-                                .foregroundColor(copiedMessage == iface.ipAddress ? .green : .secondary)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color(NSColor.controlBackgroundColor))
-                        .cornerRadius(6)
+        HStack(spacing: 8) {
+            if let interface = primaryInterface {
+                Button(action: { copyAddress(interface.ipAddress) }) {
+                    HStack(spacing: 7) {
+                        Image(systemName: copiedMessage == interface.ipAddress ? "checkmark" : "network")
+                            .foregroundColor(copiedMessage == interface.ipAddress ? .green : .accentColor)
+                        Text(interface.ipAddress)
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
                     }
-                    .buttonStyle(.plain)
-                    .help("Click to copy \(iface.ipAddress)")
                 }
+                .buttonStyle(.plain)
+                .help("\(interface.displayName) · 点击复制 IP")
+                .accessibilityLabel("复制本机 IP：\(interface.ipAddress)")
+
+                if networkMonitor.interfaces.count > 1 {
+                    Menu {
+                        ForEach(networkMonitor.interfaces) { interface in
+                            Button(interface.displayName) { copyAddress(interface.ipAddress) }
+                        }
+                    } label: {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("查看并复制其他网卡地址")
+                    .accessibilityLabel("其他网卡地址")
+                }
+            } else {
+                Label("正在检测网络…", systemImage: "network")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
             }
         }
+        .fixedSize()
         .padding(.horizontal, 10)
-        .padding(.vertical, 4)
-        .background(Color(NSColor.windowBackgroundColor).opacity(0.8))
-        .cornerRadius(8)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(7)
+    }
+
+    private func copyAddress(_ address: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(address, forType: .string)
+        copiedMessage = address
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            if copiedMessage == address { copiedMessage = nil }
+        }
     }
 }

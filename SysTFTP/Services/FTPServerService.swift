@@ -39,7 +39,7 @@ public final class FTPServerService {
         parameters.allowLocalEndpointReuse = true
         
         guard let port = NWEndpoint.Port(rawValue: UInt16(config.port)) else {
-            throw NSError(domain: "FTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid port number: \(config.port)"])
+            throw NSError(domain: "FTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效端口号：\(config.port)"])
         }
         
         let newListener = try NWListener(using: parameters, on: port)
@@ -48,10 +48,10 @@ public final class FTPServerService {
             guard let self = self else { return }
             switch state {
             case .ready:
-                self.delegate?.ftpServerDidLog("FTP Server listening on TCP port \(self.config.port)", isError: false)
+                self.delegate?.ftpServerDidLog("FTP 服务正在监听 TCP 端口 \(self.config.port)", isError: false)
                 self.delegate?.ftpServerStatusChanged(isRunning: true, port: self.config.port)
             case .failed(let error):
-                self.delegate?.ftpServerDidLog("FTP Server failed: \(error.localizedDescription) (Port \(self.config.port) may require root/sudo)", isError: true)
+                self.delegate?.ftpServerDidLog("FTP 服务启动失败：\(error.localizedDescription)（端口 \(self.config.port) 可能需要管理员权限）", isError: true)
                 self.delegate?.ftpServerStatusChanged(isRunning: false, port: self.config.port)
             case .cancelled:
                 self.delegate?.ftpServerStatusChanged(isRunning: false, port: self.config.port)
@@ -79,12 +79,12 @@ public final class FTPServerService {
         activeSessions.removeAll()
         sessionLock.unlock()
         
-        delegate?.ftpServerDidLog("FTP Server stopped.", isError: false)
+        delegate?.ftpServerDidLog("FTP 服务已停止。", isError: false)
         delegate?.ftpServerStatusChanged(isRunning: false, port: config.port)
     }
     
     private func handleNewClient(_ connection: NWConnection) {
-        var clientIP = "Unknown"
+        var clientIP = "未知"
         var clientPort: UInt16 = 0
         if case .hostPort(let host, let port) = connection.endpoint {
             clientIP = "\(host)"
@@ -162,7 +162,7 @@ private final class FTPClientSession {
         sendReply(config.welcomeBanner)
         
         updateSessionInfo()
-        onLog("FTP Client connected from \(clientIP):\(clientPort)", false)
+        onLog("FTP 客户端已连接：\(clientIP):\(clientPort)", false)
         
         startInactivityTimer()
         readCommand()
@@ -182,7 +182,7 @@ private final class FTPClientSession {
             self.inactivityTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
                 guard let self = self else { return }
                 if Date().timeIntervalSince(self.lastActivityTime) > Double(self.config.maxIdleTimeoutSeconds) {
-                    self.onLog("FTP Client \(self.clientIP) disconnected due to 10-minute inactivity timeout.", false)
+                    self.onLog("FTP 客户端 \(self.clientIP) 已断开：超过 10 分钟无活动。", false)
                     self.sendReply("421 Timeout - session closed due to inactivity.")
                     self.disconnect()
                 }
@@ -194,7 +194,7 @@ private final class FTPClientSession {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] content, context, isComplete, error in
             guard let self = self else { return }
             if let error = error {
-                self.onLog("FTP connection error (\(self.clientIP)): \(error.localizedDescription)", true)
+                self.onLog("FTP 连接错误（\(self.clientIP)）：\(error.localizedDescription)", true)
                 self.disconnect()
                 return
             }
@@ -331,7 +331,7 @@ private final class FTPClientSession {
         try? FileManager.default.createDirectory(atPath: currentActualPath, withIntermediateDirectories: true)
         
         updateSessionInfo()
-        onLog("FTP User '\(user.username)' logged in successfully.", false)
+        onLog("FTP 用户 '\(user.username)' 登录成功。", false)
         sendReply("230 User \(user.username) logged in.")
     }
     
@@ -502,7 +502,7 @@ private final class FTPClientSession {
             dataConn.send(content: fileData, completion: .contentProcessed { [weak self] _ in
                 dataConn.cancel()
                 self?.sendReply("226 Transfer complete.")
-                self?.onLog("FTP Download finished: \(filename) (\(fileData.count) bytes)", false)
+                self?.onLog("FTP 下载完成：\(filename)（\(fileData.count) 字节）", false)
             })
         }
     }
@@ -542,7 +542,7 @@ private final class FTPClientSession {
                         do {
                             try receivedData.write(to: URL(fileURLWithPath: resolved.actual))
                             self.sendReply("226 Transfer complete (\(receivedData.count) bytes).")
-                            self.onLog("FTP Upload finished: \(filename) (\(receivedData.count) bytes)", false)
+                            self.onLog("FTP 上传完成：\(filename)（\(receivedData.count) 字节）", false)
                         } catch {
                             self.sendReply("451 Error saving uploaded file: \(error.localizedDescription)")
                         }
@@ -705,7 +705,7 @@ private final class FTPClientSession {
             id: id,
             clientIP: clientIP,
             clientPort: clientPort,
-            username: currentUser?.username ?? pendingUsername ?? "Anonymous",
+            username: currentUser?.username ?? pendingUsername ?? "未登录",
             currentDirectory: currentVirtualDir,
             isConnected: true
         )

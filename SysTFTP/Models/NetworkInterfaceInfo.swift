@@ -12,13 +12,13 @@ public struct NetworkInterfaceInfo: Identifiable, Hashable {
         if name.hasPrefix("en0") {
             typeName = "Wi-Fi (en0)"
         } else if name.hasPrefix("en") {
-            typeName = "Ethernet (\(name))"
+            typeName = "以太网（\(name)）"
         } else if name.hasPrefix("bridge") || name.hasPrefix("ap") {
-            typeName = "Bridge/Hotspot (\(name))"
+            typeName = "网桥 / 热点（\(name)）"
         } else if name.hasPrefix("utun") || name.hasPrefix("tun") {
             typeName = "VPN (\(name))"
         } else if name == "lo0" {
-            typeName = "Loopback"
+            typeName = "本地回环"
         } else {
             typeName = name
         }

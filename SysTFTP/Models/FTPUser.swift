@@ -117,7 +117,7 @@ public struct FTPSessionInfo: Identifiable, Equatable {
     public let connectTime: Date
     public var lastActivityTime: Date
     
-    public init(id: UUID = UUID(), clientIP: String, clientPort: UInt16, username: String = "Not logged in", currentDirectory: String = "/", isConnected: Bool = true, connectTime: Date = Date(), lastActivityTime: Date = Date()) {
+    public init(id: UUID = UUID(), clientIP: String, clientPort: UInt16, username: String = "未登录", currentDirectory: String = "/", isConnected: Bool = true, connectTime: Date = Date(), lastActivityTime: Date = Date()) {
         self.id = id
         self.clientIP = clientIP
         self.clientPort = clientPort

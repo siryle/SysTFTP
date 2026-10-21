@@ -5,7 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "SysTFTP",
-    defaultLocalization: "en",
+    defaultLocalization: "zh-Hans",
     platforms: [
         .macOS(.v13)
     ],

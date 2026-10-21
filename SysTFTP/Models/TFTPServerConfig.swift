@@ -16,6 +16,13 @@ public struct TFTPServerConfig: Codable, Equatable {
 public enum TFTPTransferDirection: String, Codable {
     case upload = "Upload (WRQ)"
     case download = "Download (RRQ)"
+
+    public var displayName: String {
+        switch self {
+        case .upload: return "上传（WRQ）"
+        case .download: return "下载（RRQ）"
+        }
+    }
 }
 
 public enum TFTPTransferStatus: String, Codable {
@@ -23,6 +30,15 @@ public enum TFTPTransferStatus: String, Codable {
     case completed = "Completed"
     case failed = "Failed"
     case aborted = "Aborted"
+
+    public var displayName: String {
+        switch self {
+        case .inProgress: return "传输中"
+        case .completed: return "已完成"
+        case .failed: return "失败"
+        case .aborted: return "已取消"
+        }
+    }
 }
 
 public struct TFTPTransferItem: Identifiable, Equatable {

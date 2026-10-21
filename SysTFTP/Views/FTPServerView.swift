@@ -15,274 +15,221 @@ public struct FTPServerView: View {
     
     public var body: some View {
         VStack(spacing: 0) {
-            // Header Bar
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("FTP Server")
-                        .font(.system(size: 20, weight: .bold))
-                    Text("RFC 959 compliant FTP daemon with PASV/PORT, MD5 hashes, and per-user rights")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer()
-                
+            PageHeaderView(
+                title: "FTP 服务器",
+                subtitle: "RFC 959 · PASV/PORT、MD5 密码与用户权限管理"
+            ) {
                 HStack(spacing: 16) {
-                    HStack(spacing: 6) {
-                        Text("Port:")
+                    HStack(spacing: 8) {
+                        Text("TCP 端口")
                             .font(.system(size: 12))
                         TextField("21", value: $appState.ftpServerConfig.port, formatter: NumberFormatter())
-                            .frame(width: 60)
+                            .frame(width: 76)
                             .textFieldStyle(.roundedBorder)
                     }
-                    
-                    Button(action: {
-                        appState.toggleFTPServer()
-                    }) {
+                    Button(action: { appState.toggleFTPServer() }) {
                         Label(
-                            appState.isFTPServerRunning ? "Stop Server" : "Start Server",
+                            appState.isFTPServerRunning ? "停止服务" : "启动服务",
                             systemImage: appState.isFTPServerRunning ? "stop.fill" : "play.fill"
                         )
-                        .font(.system(size: 13, weight: .semibold))
                     }
                     .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                     .tint(appState.isFTPServerRunning ? .red : .green)
                 }
             }
-            .padding(16)
-            .background(Color(NSColor.controlBackgroundColor))
-            
+
             Divider()
-            
-            // Main User Management & Connection Monitor
+
             HSplitView {
-                // Left Column: User Profiles & Rights
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack {
-                        Text("Configured User Profiles")
-                            .font(.system(size: 13, weight: .semibold))
-                        Spacer()
-                        Button("+ Add User") {
-                            addNewUser()
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundColor(.accentColor)
-                        .font(.system(size: 12, weight: .medium))
-                    }
-                    
-                    // User selection list
-                    List(selection: $selectedUsername) {
-                        ForEach(appState.ftpServerConfig.users) { user in
-                            HStack {
-                                Image(systemName: user.isAnonymous ? "person.crop.circle.badge.questionmark" : "person.crop.circle")
-                                    .foregroundColor(user.canLogin ? .accentColor : .secondary)
-                                Text(user.username)
-                                    .font(.system(size: 13, weight: user.username == selectedUsername ? .bold : .regular))
-                                Spacer()
-                                if !user.canLogin {
-                                    Text("Disabled")
-                                        .font(.system(size: 10))
-                                        .foregroundColor(.red)
-                                }
-                            }
-                            .tag(user.username)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        userList
+                        if let index = currentUserIndex {
+                            userDetails(at: index)
                         }
                     }
-                    .frame(height: 120)
-                    .listStyle(.inset)
-                    
-                    Divider()
-                    
-                    // User Details Form
-                    if let idx = currentUserIndex {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Profile Name:")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .frame(width: 100, alignment: .leading)
-                                if appState.ftpServerConfig.users[idx].isAnonymous {
-                                    Text("anonymous (built-in)")
-                                        .font(.system(size: 12, weight: .semibold))
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    TextField("Username", text: $appState.ftpServerConfig.users[idx].username)
-                                        .textFieldStyle(.roundedBorder)
-                                }
-                            }
-                            
-                            HStack {
-                                Text("Password:")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .frame(width: 100, alignment: .leading)
-                                if appState.ftpServerConfig.users[idx].isAnonymous {
-                                    Text("No password required")
-                                        .font(.system(size: 12))
-                                        .foregroundColor(.secondary)
-                                } else {
-                                    Button("Set / Change Password...") {
-                                        newPasswordInput = ""
-                                        showingPasswordSheet = true
-                                    }
-                                    .buttonStyle(.bordered)
-                                }
-                            }
-                            
-                            HStack {
-                                Text("User Directory:")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .frame(width: 100, alignment: .leading)
-                                TextField("User root folder", text: $appState.ftpServerConfig.users[idx].userDirectory)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(size: 11, design: .monospaced))
-                                Button("Browse...") {
-                                    selectUserFolder(userIndex: idx)
-                                }
-                            }
-                            
-                            Text("User Rights Checklist:")
-                                .font(.system(size: 12, weight: .bold))
-                                .padding(.top, 4)
-                            
-                            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                                Toggle("Login", isOn: $appState.ftpServerConfig.users[idx].canLogin)
-                                Toggle("Download", isOn: $appState.ftpServerConfig.users[idx].canDownload)
-                                Toggle("Upload", isOn: $appState.ftpServerConfig.users[idx].canUpload)
-                                Toggle("Overwrite Files", isOn: $appState.ftpServerConfig.users[idx].canOverwrite)
-                                Toggle("Delete Files", isOn: $appState.ftpServerConfig.users[idx].canDelete)
-                                Toggle("Rename Files", isOn: $appState.ftpServerConfig.users[idx].canRename)
-                                Toggle("Make Directories", isOn: $appState.ftpServerConfig.users[idx].canMkdir)
-                                Toggle("Delete Directories", isOn: $appState.ftpServerConfig.users[idx].canRmdir)
-                            }
-                            .font(.system(size: 11))
-                            .toggleStyle(.checkbox)
-                            
-                            HStack {
-                                Spacer()
-                                if !appState.ftpServerConfig.users[idx].isAnonymous {
-                                    Button("Delete Profile") {
-                                        deleteUser(at: idx)
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .tint(.red)
-                                }
-                            }
-                            .padding(.top, 6)
-                        }
-                    }
+                    .padding(20)
                 }
-                .padding(14)
-                .frame(minWidth: 380)
-                
-                // Right Column: Connected Sessions & Live Log
+                .frame(minWidth: 320, idealWidth: 380)
+
                 VStack(spacing: 0) {
-                    // Active Sessions
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Active FTP Sessions (\(appState.ftpSessions.count))")
-                            .font(.system(size: 13, weight: .semibold))
-                            .padding(.horizontal, 14)
-                            .padding(.top, 10)
-                        
-                        if appState.ftpSessions.isEmpty {
-                            Text("No active FTP client sessions.")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                        } else {
-                            List(appState.ftpSessions) { session in
-                                HStack {
-                                    Image(systemName: "desktopcomputer")
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text("\(session.username) @ \(session.clientIP):\(session.clientPort)")
-                                            .font(.system(size: 11, weight: .bold))
-                                        Text("CWD: \(session.currentDirectory)")
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                    }
-                                    Spacer()
-                                    Text("Connected")
-                                        .font(.system(size: 9, weight: .semibold))
-                                        .foregroundColor(.green)
-                                }
-                            }
-                            .frame(height: 100)
-                            .listStyle(.inset)
-                        }
-                    }
-                    
+                    sessionList
                     Divider()
-                    
-                    // FTP Log Stream
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("FTP Command & Transfer Log")
-                                .font(.system(size: 13, weight: .semibold))
-                            Spacer()
-                            Button("Clear") {
-                                appState.ftpLogs.removeAll()
-                            }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
-                        }
-                        .padding(.horizontal, 14)
-                        .padding(.top, 10)
-                        
-                        ScrollViewReader { proxy in
-                            ScrollView {
-                                LazyVStack(alignment: .leading, spacing: 3) {
-                                    ForEach(Array(appState.ftpLogs.enumerated()), id: \.offset) { idx, line in
-                                        Text(line)
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .textSelection(.enabled)
-                                            .id(idx)
-                                    }
-                                }
-                                .padding(10)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .background(Color(NSColor.textBackgroundColor))
-                            .cornerRadius(6)
-                            .padding(.horizontal, 10)
-                            .padding(.bottom, 10)
-                            .onChange(of: appState.ftpLogs.count) { _ in
-                                if let last = appState.ftpLogs.indices.last {
-                                    proxy.scrollTo(last, anchor: .bottom)
-                                }
-                            }
-                        }
+                    ConsoleLogView(title: "FTP 命令与传输日志", lines: appState.ftpLogs) {
+                        appState.ftpLogs.removeAll()
                     }
+                    .frame(minHeight: 160)
                 }
-                .frame(minWidth: 320)
+                .frame(minWidth: 280)
             }
         }
         .sheet(isPresented: $showingPasswordSheet) {
-            VStack(spacing: 16) {
-                Text("Set Password for \(selectedUsername)")
-                    .font(.headline)
-                
-                SecureField("Enter new password", text: $newPasswordInput)
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("设置用户密码")
+                        .font(.system(size: 18, weight: .semibold))
+                    Text(selectedUsername)
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .lineLimit(2)
+                }
+                SecureField("输入新密码", text: $newPasswordInput)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
-                
-                HStack(spacing: 16) {
-                    Button("Cancel") {
-                        showingPasswordSheet = false
-                    }
-                    Button("Save Password") {
-                        if let idx = currentUserIndex {
-                            appState.ftpServerConfig.users[idx].passwordHash = FTPUser.hashMD5(newPasswordInput)
-                        }
-                        showingPasswordSheet = false
-                    }
-                    .buttonStyle(.borderedProminent)
+                    .onSubmit(savePassword)
+                HStack(spacing: 12) {
+                    Spacer()
+                    Button("取消") { showingPasswordSheet = false }
+                        .keyboardShortcut(.cancelAction)
+                    Button("保存密码", action: savePassword)
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.defaultAction)
                 }
             }
             .padding(24)
-            .frame(width: 320)
+            .frame(width: 380)
         }
     }
-    
+
+    private var userList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("用户列表")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button(action: addNewUser) {
+                    Label("添加用户", systemImage: "plus")
+                }
+                .controlSize(.small)
+            }
+            List(selection: $selectedUsername) {
+                ForEach(appState.ftpServerConfig.users) { user in
+                    HStack(spacing: 10) {
+                        Image(systemName: user.isAnonymous ? "person.crop.circle.badge.questionmark" : "person.crop.circle")
+                            .foregroundColor(user.canLogin ? .accentColor : .secondary)
+                        Text(user.username)
+                            .font(.system(size: 13, weight: user.username == selectedUsername ? .semibold : .regular))
+                            .lineLimit(1)
+                            .help(user.username)
+                        Spacer()
+                        if !user.canLogin {
+                            Text("已禁用")
+                                .font(.system(size: 11))
+                                .foregroundColor(.red)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    .tag(user.username)
+                }
+            }
+            .frame(height: 128)
+            .listStyle(.inset)
+            .cornerRadius(8)
+        }
+    }
+
+    private func userDetails(at index: Int) -> some View {
+        VStack(alignment: .leading, spacing: 20) {
+            FormSectionView(title: "账户信息") {
+                FormFieldView(title: "用户名") {
+                    if appState.ftpServerConfig.users[index].isAnonymous {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("anonymous")
+                                .font(.system(size: 13, weight: .medium))
+                            Text("内置匿名用户，无需密码")
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                        }
+                    } else {
+                        TextField("用户名", text: $appState.ftpServerConfig.users[index].username)
+                    }
+                }
+                if !appState.ftpServerConfig.users[index].isAnonymous {
+                    FormFieldView(title: "登录密码") {
+                        Button("设置 / 修改密码…") {
+                            newPasswordInput = ""
+                            showingPasswordSheet = true
+                        }
+                    }
+                }
+                FormFieldView(title: "用户根目录") {
+                    TextField("用户根目录", text: $appState.ftpServerConfig.users[index].userDirectory)
+                        .font(.system(size: 12, design: .monospaced))
+                        .help(appState.ftpServerConfig.users[index].userDirectory)
+                    Button("选择目录…") { selectUserFolder(userIndex: index) }
+                        .controlSize(.small)
+                }
+            }
+            .textFieldStyle(.roundedBorder)
+
+            FormSectionView(title: "访问权限") {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 110), spacing: 16)], alignment: .leading, spacing: 14) {
+                    Toggle("允许登录", isOn: $appState.ftpServerConfig.users[index].canLogin)
+                    Toggle("下载文件", isOn: $appState.ftpServerConfig.users[index].canDownload)
+                    Toggle("上传文件", isOn: $appState.ftpServerConfig.users[index].canUpload)
+                    Toggle("覆盖文件", isOn: $appState.ftpServerConfig.users[index].canOverwrite)
+                    Toggle("删除文件", isOn: $appState.ftpServerConfig.users[index].canDelete)
+                    Toggle("重命名文件", isOn: $appState.ftpServerConfig.users[index].canRename)
+                    Toggle("创建目录", isOn: $appState.ftpServerConfig.users[index].canMkdir)
+                    Toggle("删除目录", isOn: $appState.ftpServerConfig.users[index].canRmdir)
+                }
+                .toggleStyle(.checkbox)
+                .font(.system(size: 12))
+            }
+
+            if !appState.ftpServerConfig.users[index].isAnonymous {
+                HStack {
+                    Spacer()
+                    Button("删除用户", role: .destructive) { deleteUser(at: index) }
+                }
+            }
+        }
+    }
+
+    private var sessionList: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("在线会话（\(appState.ftpSessions.count)）")
+                .font(.system(size: 13, weight: .semibold))
+            if appState.ftpSessions.isEmpty {
+                Label("暂无客户端连接", systemImage: "desktopcomputer")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        ForEach(appState.ftpSessions) { session in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(session.username)
+                                    .font(.system(size: 13, weight: .semibold))
+                                Text("\(session.clientIP):\(String(session.clientPort))")
+                                    .font(.system(size: 12, design: .monospaced))
+                                Text("当前目录：\(session.currentDirectory)")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                    .help(session.currentDirectory)
+                            }
+                            .textSelection(.enabled)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 150)
+            }
+        }
+        .padding(16)
+    }
+
+    private func savePassword() {
+        if let index = currentUserIndex {
+            appState.ftpServerConfig.users[index].passwordHash = FTPUser.hashMD5(newPasswordInput)
+        }
+        showingPasswordSheet = false
+    }
+
     private func addNewUser() {
         let baseName = "user\(appState.ftpServerConfig.users.count)"
         let defaultPath = (FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("SysTFTP/FTP/\(baseName)").path) ?? "/tmp/SysTFTP/FTP/\(baseName)"
@@ -316,7 +263,8 @@ public struct FTPServerView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = true
-        panel.prompt = "Choose User Root Folder"
+        panel.title = "选择用户根目录"
+        panel.prompt = "选择目录"
         if panel.runModal() == .OK, let url = panel.url {
             appState.ftpServerConfig.users[userIndex].userDirectory = url.path
         }

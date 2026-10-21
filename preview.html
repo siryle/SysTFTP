@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SysTFTP - macOS Network Utility Suite Preview</title>
+  <title>SysTFTP - macOS 网络工具套件预览</title>
   <style>
     :root {
       --bg-color: #1e1e1e;
@@ -45,6 +45,8 @@
       align-items: center;
       gap: 20px;
       margin-bottom: 24px;
+      width: min(1180px, 100%);
+      line-height: 1.7;
     }
 
     .hero-logo {
@@ -68,8 +70,9 @@
 
     /* macOS Window Shell */
     .mac-window {
-      width: 1060px;
-      height: 680px;
+      width: min(1180px, 100%);
+      height: min(820px, calc(100vh - 160px));
+      min-height: 560px;
       background: var(--window-bg);
       border-radius: 14px;
       box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.12);
@@ -81,7 +84,7 @@
 
     /* macOS Titlebar */
     .titlebar {
-      height: 48px;
+      min-height: 54px;
       background: rgba(30, 34, 45, 0.95);
       border-bottom: 1px solid var(--border);
       display: flex;
@@ -94,6 +97,7 @@
       display: flex;
       gap: 8px;
       margin-right: 20px;
+      flex-shrink: 0;
     }
 
     .traffic-light {
@@ -113,6 +117,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      white-space: nowrap;
     }
 
     .titlebar-spacer { flex: 1; }
@@ -128,6 +133,7 @@
       font-size: 12px;
       font-family: monospace;
       color: #38bdf8;
+      white-space: nowrap;
     }
 
     .master-btn {
@@ -141,6 +147,8 @@
       font-weight: 600;
       cursor: pointer;
       transition: all 0.2s;
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .master-btn:hover { opacity: 0.9; }
 
@@ -149,11 +157,12 @@
       flex: 1;
       display: flex;
       overflow: hidden;
+      min-height: 0;
     }
 
     /* Sidebar */
     .sidebar {
-      width: 210px;
+      flex: 0 0 220px;
       background: var(--sidebar-bg);
       border-right: 1px solid var(--border);
       padding: 14px 10px;
@@ -166,13 +175,14 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      padding: 8px 12px;
+      padding: 11px 12px;
       border-radius: 8px;
       font-size: 13px;
       font-weight: 500;
       color: #d1d5db;
       cursor: pointer;
       transition: all 0.15s;
+      white-space: nowrap;
     }
 
     .sidebar-item:hover {
@@ -197,14 +207,17 @@
       border-radius: 50%;
       background: var(--green);
       margin-left: auto;
+      flex-shrink: 0;
     }
 
     /* Content Area */
     .content-area {
       flex: 1;
+      min-width: 0;
       background: var(--window-bg);
       padding: 24px;
       overflow-y: auto;
+      line-height: 1.7;
     }
 
     .tab-content { display: none; }
@@ -213,7 +226,7 @@
     /* Grid Cards */
     .cards-grid {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
       gap: 16px;
       margin-top: 18px;
     }
@@ -226,12 +239,15 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
+      min-width: 0;
     }
 
     .card-top {
       display: flex;
       justify-content: space-between;
-      align-items: center;
+      align-items: flex-start;
+      flex-wrap: wrap;
+      gap: 10px;
     }
 
     .card-title {
@@ -249,6 +265,8 @@
       border-radius: 20px;
       background: rgba(16, 185, 129, 0.15);
       color: var(--green);
+      white-space: nowrap;
+      flex-shrink: 0;
     }
     .status-badge.stopped {
       background: rgba(156, 163, 175, 0.15);
@@ -266,11 +284,17 @@
     .card-row {
       display: flex;
       justify-content: space-between;
+      align-items: baseline;
+      gap: 16px;
     }
+    .card-row > span:first-child { flex-shrink: 0; }
     .card-val {
       font-family: monospace;
       color: var(--text-main);
       font-weight: 500;
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
     }
 
     .card-actions {
@@ -310,7 +334,8 @@
       height: 180px;
       overflow-y: auto;
       margin-top: 14px;
-      line-height: 1.6;
+      line-height: 1.9;
+      overflow-wrap: anywhere;
     }
 
     .log-line { color: #d1d5db; }
@@ -321,6 +346,7 @@
     /* Syslog Table */
     .syslog-table {
       width: 100%;
+      min-width: 820px;
       border-collapse: collapse;
       font-size: 12px;
       margin-top: 14px;
@@ -347,15 +373,59 @@
     .sev-err { background: rgba(239, 68, 68, 0.2); color: #f87171; }
     .sev-warn { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
     .sev-info { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+    .table-scroll {
+      max-width: 100%;
+      overflow-x: auto;
+      margin-top: 14px;
+    }
+    .table-scroll .syslog-table { margin-top: 0; }
+
+    @media (max-width: 900px) {
+      body { padding: 20px 12px; }
+      .sidebar { flex-basis: 195px; }
+      .content-area { padding: 20px; }
+      .window-title { display: none; }
+      .hero-title h1 { font-size: 23px; }
+      .hero-title p { max-width: 560px; }
+    }
+
+    @media (max-width: 640px) {
+      body { justify-content: flex-start; padding: 16px 10px; }
+      .hero-header { align-items: flex-start; gap: 12px; margin-bottom: 16px; }
+      .hero-logo { width: 48px; height: 48px; border-radius: 12px; }
+      .hero-title h1 { font-size: 20px; }
+      .hero-title p { font-size: 12px; }
+      .mac-window { height: 780px; min-height: 560px; }
+      .titlebar { flex-wrap: wrap; gap: 10px; padding: 12px; }
+      .traffic-lights { margin-right: 0; gap: 6px; }
+      .titlebar-spacer { display: none; }
+      .ip-badge { margin-left: auto; font-size: 11px; }
+      .master-btn { margin-left: auto; }
+      .window-body { flex-direction: column; }
+      .sidebar {
+        flex: 0 0 auto;
+        width: 100%;
+        flex-direction: row;
+        overflow-x: auto;
+        padding: 10px;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .sidebar-item { flex: 0 0 auto; padding: 8px 10px; }
+      .content-area { padding: 16px; }
+      .cards-grid { grid-template-columns: minmax(0, 1fr); }
+      .service-card { padding: 16px; }
+    }
   </style>
 </head>
 <body>
 
   <div class="hero-header">
-    <img src="Assets/logo.png" alt="SysTFTP Logo" class="hero-logo" onerror="this.src='logo.png'">
+    <img src="Assets/logo.png" alt="SysTFTP 标志" class="hero-logo" onerror="this.src='logo.png'">
     <div class="hero-title">
-      <h1>SysTFTP for macOS</h1>
-      <p>3CDaemon Remastered • TFTP Server • TFTP Client • FTP Server • Syslog Server</p>
+      <h1>SysTFTP macOS 版</h1>
+      <p>3CDaemon 重制版 • TFTP 服务器 • TFTP 客户端 • FTP 服务器 • Syslog 日志服务器</p>
     </div>
   </div>
 
@@ -368,13 +438,13 @@
         <div class="traffic-light light-zoom"></div>
       </div>
       <div class="window-title">
-        <span>SysTFTP Suite</span>
+        <span>SysTFTP 工具套件</span>
       </div>
       <div class="titlebar-spacer"></div>
       <div class="ip-badge">
         <span>● Wi-Fi (en0): 192.168.1.100</span>
       </div>
-      <button class="master-btn" id="masterToggleBtn" onclick="toggleAllServices()">Start All Daemons</button>
+      <button class="master-btn" id="masterToggleBtn" onclick="toggleAllServices()">启动全部服务</button>
     </div>
 
     <!-- Body -->
@@ -383,30 +453,30 @@
       <div class="sidebar">
         <div class="sidebar-item active" onclick="showTab('overview', this)">
           <span class="sidebar-icon">⊞</span>
-          <span>Overview</span>
+          <span>概览</span>
         </div>
         <div class="sidebar-item" onclick="showTab('tftp-server', this)">
           <span class="sidebar-icon">🖧</span>
-          <span>TFTP Server</span>
+          <span>TFTP 服务器</span>
           <div class="dot-badge" id="tftp-dot" style="display:none"></div>
         </div>
         <div class="sidebar-item" onclick="showTab('tftp-client', this)">
           <span class="sidebar-icon">⇅</span>
-          <span>TFTP Client</span>
+          <span>TFTP 客户端</span>
         </div>
         <div class="sidebar-item" onclick="showTab('ftp-server', this)">
           <span class="sidebar-icon">📁</span>
-          <span>FTP Server</span>
+          <span>FTP 服务器</span>
           <div class="dot-badge" id="ftp-dot" style="display:none"></div>
         </div>
         <div class="sidebar-item" onclick="showTab('syslog-server', this)">
           <span class="sidebar-icon">📡</span>
-          <span>Syslog Server</span>
+          <span>Syslog 日志服务器</span>
           <div class="dot-badge" id="syslog-dot" style="display:none"></div>
         </div>
         <div class="sidebar-item" onclick="showTab('settings', this)">
           <span class="sidebar-icon">⚙</span>
-          <span>Settings</span>
+          <span>设置</span>
         </div>
       </div>
 
@@ -414,184 +484,186 @@
       <div class="content-area">
         <!-- Overview Tab -->
         <div id="overview" class="tab-content active">
-          <h2>Dashboard</h2>
-          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">Overview of all 4 network services ported from 3CDaemon</p>
+          <h2>控制台</h2>
+          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">源自 3CDaemon 的四大网络工具概览</p>
 
           <div class="cards-grid">
             <!-- TFTP Server Card -->
             <div class="service-card">
               <div class="card-top">
-                <span class="card-title">TFTP Server</span>
-                <span class="status-badge stopped" id="card-tftp-status">Stopped</span>
+                <span class="card-title">TFTP 服务器</span>
+                <span class="status-badge stopped" id="card-tftp-status">已停止</span>
               </div>
               <div class="card-details">
-                <div class="card-row"><span>Port:</span><span class="card-val">UDP 69</span></div>
-                <div class="card-row"><span>Directory:</span><span class="card-val">~/Downloads/SysTFTP/TFTP</span></div>
-                <div class="card-row"><span>Active Transfers:</span><span class="card-val">0</span></div>
+                <div class="card-row"><span>端口：</span><span class="card-val">UDP 69</span></div>
+                <div class="card-row"><span>目录：</span><span class="card-val">~/Downloads/SysTFTP/TFTP</span></div>
+                <div class="card-row"><span>正在传输：</span><span class="card-val">0</span></div>
               </div>
               <div class="card-actions">
-                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('tftp-server')">Configure</a>
-                <button class="btn-toggle" id="btn-tftp-toggle" onclick="toggleTFTPServer()">Start</button>
+                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('tftp-server')">配置</a>
+                <button class="btn-toggle" id="btn-tftp-toggle" onclick="toggleTFTPServer()">启动</button>
               </div>
             </div>
 
             <!-- FTP Server Card -->
             <div class="service-card">
               <div class="card-top">
-                <span class="card-title">FTP Server</span>
-                <span class="status-badge stopped" id="card-ftp-status">Stopped</span>
+                <span class="card-title">FTP 服务器</span>
+                <span class="status-badge stopped" id="card-ftp-status">已停止</span>
               </div>
               <div class="card-details">
-                <div class="card-row"><span>Port:</span><span class="card-val">TCP 21 (PASV: 40000-40100)</span></div>
-                <div class="card-row"><span>Users:</span><span class="card-val">anonymous, admin</span></div>
-                <div class="card-row"><span>Sessions:</span><span class="card-val">0</span></div>
+                <div class="card-row"><span>端口：</span><span class="card-val">TCP 21 (PASV: 40000-40100)</span></div>
+                <div class="card-row"><span>用户：</span><span class="card-val">anonymous, admin</span></div>
+                <div class="card-row"><span>会话：</span><span class="card-val">0</span></div>
               </div>
               <div class="card-actions">
-                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('ftp-server')">Configure</a>
-                <button class="btn-toggle" id="btn-ftp-toggle" onclick="toggleFTPServer()">Start</button>
+                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('ftp-server')">配置</a>
+                <button class="btn-toggle" id="btn-ftp-toggle" onclick="toggleFTPServer()">启动</button>
               </div>
             </div>
 
             <!-- Syslog Server Card -->
             <div class="service-card">
               <div class="card-top">
-                <span class="card-title">Syslog Server</span>
-                <span class="status-badge stopped" id="card-syslog-status">Stopped</span>
+                <span class="card-title">Syslog 日志服务器</span>
+                <span class="status-badge stopped" id="card-syslog-status">已停止</span>
               </div>
               <div class="card-details">
-                <div class="card-row"><span>Port:</span><span class="card-val">UDP 514</span></div>
-                <div class="card-row"><span>Daily Rotation:</span><span class="card-val">Enabled</span></div>
-                <div class="card-row"><span>Events Received:</span><span class="card-val" id="syslog-count">4</span></div>
+                <div class="card-row"><span>端口：</span><span class="card-val">UDP 514</span></div>
+                <div class="card-row"><span>按日轮转：</span><span class="card-val">已启用</span></div>
+                <div class="card-row"><span>已接收事件：</span><span class="card-val" id="syslog-count">4</span></div>
               </div>
               <div class="card-actions">
-                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('syslog-server')">Configure</a>
-                <button class="btn-toggle" id="btn-syslog-toggle" onclick="toggleSyslogServer()">Start</button>
+                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('syslog-server')">配置</a>
+                <button class="btn-toggle" id="btn-syslog-toggle" onclick="toggleSyslogServer()">启动</button>
               </div>
             </div>
 
             <!-- TFTP Client Card -->
             <div class="service-card">
               <div class="card-top">
-                <span class="card-title">TFTP Client</span>
-                <span class="status-badge stopped">Idle</span>
+                <span class="card-title">TFTP 客户端</span>
+                <span class="status-badge stopped">空闲</span>
               </div>
               <div class="card-details">
-                <div class="card-row"><span>Target Server:</span><span class="card-val">192.168.1.1:69</span></div>
-                <div class="card-row"><span>Negotiation:</span><span class="card-val">blksize (1428), tsize, timeout</span></div>
-                <div class="card-row"><span>Status:</span><span class="card-val">Ready</span></div>
+                <div class="card-row"><span>目标服务器：</span><span class="card-val">192.168.1.1:69</span></div>
+                <div class="card-row"><span>协商选项：</span><span class="card-val">blksize (1428), tsize, timeout</span></div>
+                <div class="card-row"><span>状态：</span><span class="card-val">就绪</span></div>
               </div>
               <div class="card-actions">
-                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('tftp-client')">Open Client</a>
-                <button class="btn-toggle" onclick="showTab('tftp-client')">Transfer</button>
+                <a href="#" style="color:var(--accent); font-size:12px; text-decoration:none;" onclick="showTab('tftp-client')">打开客户端</a>
+                <button class="btn-toggle" onclick="showTab('tftp-client')">传输</button>
               </div>
             </div>
           </div>
 
           <div style="margin-top:20px;">
-            <h3 style="font-size:14px; margin-bottom:8px;">Recent System Logs</h3>
+            <h3 style="font-size:14px; margin-bottom:8px;">最近系统日志</h3>
             <div class="log-box" id="systemLogBox">
-              <div class="log-line cyan">[15:15:00] SysTFTP macOS Suite initialized.</div>
-              <div class="log-line">[15:15:02] Local IP detected: 192.168.1.100 (en0)</div>
-              <div class="log-line green">[15:15:05] Ready to serve Cisco, Huawei, H3C network switches and routers.</div>
+              <div class="log-line cyan">[15:15:00] SysTFTP macOS 工具套件已初始化。</div>
+              <div class="log-line">[15:15:02] 检测到本机 IP： 192.168.1.100 (en0)</div>
+              <div class="log-line green">[15:15:05] 已就绪，可为 Cisco、华为、H3C 交换机和路由器提供服务。</div>
             </div>
           </div>
         </div>
 
         <!-- TFTP Server Tab -->
         <div id="tftp-server" class="tab-content">
-          <h2>TFTP Server Settings</h2>
-          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">RFC 1350 compliant with blocksize & timeout negotiation</p>
+          <h2>TFTP 服务器设置</h2>
+          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">支持 RFC 1350、块大小与超时协商</p>
           <div style="background:var(--card-bg); padding:16px; border-radius:10px; margin-top:16px;">
-            <p><strong>Upload / Download Directory:</strong> <code>~/Downloads/SysTFTP/TFTP</code></p>
-            <p style="margin-top:8px;">✓ Allow overwrite of existing files: <b>No</b></p>
-            <p style="margin-top:4px;">✓ Create directories for incoming requests: <b>Yes</b></p>
-            <p style="margin-top:4px;">✓ Per-packet timeout: <b>5 seconds</b> | Max retries: <b>10</b></p>
+            <p><strong>上传 / 下载目录：</strong> <code>~/Downloads/SysTFTP/TFTP</code></p>
+            <p style="margin-top:8px;">✓ 允许覆盖已有文件： <b>否</b></p>
+            <p style="margin-top:4px;">✓ 允许为上传请求创建目录： <b>是</b></p>
+            <p style="margin-top:4px;">✓ 数据包超时： <b>5 秒</b> | 最大重试次数： <b>10</b></p>
           </div>
           <div class="log-box" style="height:280px; margin-top:16px;">
-            <div class="log-line">[TFTP] Listening on UDP port 69...</div>
-            <div class="log-line cyan">[TFTP] RRQ received from 192.168.1.201: 'c2960-lanbasek9-mz.bin' (blksize=1428)</div>
-            <div class="log-line green">[TFTP] Transfer complete: 16,842,240 bytes transferred in 12.4s (1.35 MB/s)</div>
+            <div class="log-line">[TFTP] 正在监听 UDP 端口 69…</div>
+            <div class="log-line cyan">[TFTP] 收到来自 192.168.1.201 的下载请求（RRQ）：'c2960-lanbasek9-mz.bin'（blksize=1428）</div>
+            <div class="log-line green">[TFTP] 传输完成：共 16,842,240 字节，耗时 12.4 秒（1.35 MB/s）</div>
           </div>
         </div>
 
         <!-- TFTP Client Tab -->
         <div id="tftp-client" class="tab-content">
-          <h2>TFTP Client</h2>
-          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">Upload or download files to remote network devices</p>
+          <h2>TFTP 客户端</h2>
+          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">向远程网络设备上传或下载文件</p>
           <div style="background:var(--card-bg); padding:16px; border-radius:10px; margin-top:16px;">
-            <p>Server: <code>192.168.1.1:69</code></p>
-            <p>Mode: <b>Octet (Binary)</b> | Direction: <b>Send File (Upload)</b></p>
-            <p>Remote File: <code>vrpcfg.cfg</code></p>
+            <p>服务器： <code>192.168.1.1:69</code></p>
+            <p>模式： <b>Octet（二进制）</b> | 方向： <b>发送文件（上传）</b></p>
+            <p>远程文件： <code>vrpcfg.cfg</code></p>
             <div style="margin-top:12px; background:#111827; height:8px; border-radius:4px; overflow:hidden;">
               <div style="background:var(--accent); width:65%; height:100%;"></div>
             </div>
-            <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">65% transferred • 1.42 MB/s • ETA: 4s</p>
+            <p style="font-size:11px; color:var(--text-muted); margin-top:6px;">已传输 65% • 1.42 MB/s • 预计剩余 4 秒</p>
           </div>
         </div>
 
         <!-- FTP Server Tab -->
         <div id="ftp-server" class="tab-content">
-          <h2>FTP Server & User Profiles</h2>
-          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">RFC 959 with granular permissions and chroot isolation</p>
+          <h2>FTP 服务器与用户配置</h2>
+          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">支持 RFC 959、精细权限管理与 chroot 目录隔离</p>
           <div style="background:var(--card-bg); padding:16px; border-radius:10px; margin-top:16px;">
-            <p>Users: <b>anonymous</b> (Read Only) | <b>admin</b> (Full Rights: Upload, Download, Overwrite, Delete, MkDir)</p>
+            <p>用户： <b>anonymous</b> （只读） | <b>admin</b> （完整权限：上传、下载、覆盖、删除、创建目录）</p>
           </div>
         </div>
 
         <!-- Syslog Server Tab -->
         <div id="syslog-server" class="tab-content">
-          <h2>Syslog Server Monitor</h2>
-          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">Real-time BSD-unix UDP 514 syslog receiver with daily rotation</p>
+          <h2>Syslog 日志监控</h2>
+          <p style="color:var(--text-muted); font-size:13px; margin-top:2px;">通过 UDP 514 实时接收 Syslog 日志，支持按日轮转</p>
           
+          <div class="table-scroll">
           <table class="syslog-table">
             <thead>
               <tr>
-                <th>Timestamp</th>
-                <th>Source IP</th>
-                <th>Facility</th>
-                <th>Severity</th>
-                <th>Message</th>
+                <th>时间</th>
+                <th>来源 IP</th>
+                <th>日志来源</th>
+                <th>严重级别</th>
+                <th>消息</th>
               </tr>
             </thead>
             <tbody>
               <tr>
                 <td>15:16:12</td>
                 <td>192.168.1.1</td>
-                <td>local7</td>
-                <td><span class="badge-sev sev-err">Error</span></td>
+                <td>本地 7</td>
+                <td><span class="badge-sev sev-err">错误</span></td>
                 <td>%LINK-3-UPDOWN: Interface GigabitEthernet0/1, changed state to down</td>
               </tr>
               <tr>
                 <td>15:16:14</td>
                 <td>192.168.1.1</td>
-                <td>local7</td>
-                <td><span class="badge-sev sev-warn">Warning</span></td>
+                <td>本地 7</td>
+                <td><span class="badge-sev sev-warn">警告</span></td>
                 <td>%OSPF-5-ADJCHG: Process 1, Nbr 10.0.0.2 on Gi0/1 from FULL to DOWN</td>
               </tr>
               <tr>
                 <td>15:16:22</td>
                 <td>192.168.1.1</td>
-                <td>local7</td>
-                <td><span class="badge-sev sev-info">Notice</span></td>
+                <td>本地 7</td>
+                <td><span class="badge-sev sev-info">通知</span></td>
                 <td>%SYS-5-CONFIG_I: Configured from console by admin on vty0</td>
               </tr>
               <tr>
                 <td>15:17:00</td>
                 <td>192.168.1.200</td>
-                <td>daemon</td>
-                <td><span class="badge-sev sev-info">Info</span></td>
+                <td>系统服务</td>
+                <td><span class="badge-sev sev-info">信息</span></td>
                 <td>ntpd[482]: synchronized to 203.0.113.10, stratum 2</td>
               </tr>
             </tbody>
           </table>
+          </div>
         </div>
 
         <!-- Settings Tab -->
         <div id="settings" class="tab-content">
-          <h2>Settings</h2>
+          <h2>设置</h2>
           <div style="background:var(--card-bg); padding:16px; border-radius:10px; margin-top:16px;">
-            <p><b>Port Presets:</b> Standard Root Ports (69, 21, 514) vs User Non-privileged Ports (6969, 2121, 5140)</p>
-            <p style="margin-top:8px;"><b>System Tray:</b> Enabled in macOS Menu Bar Extra</p>
+            <p><b>端口预设：</b> 标准端口（69、21、514）与普通端口（6969、2121、5140）</p>
+            <p style="margin-top:8px;"><b>菜单栏图标：</b> 已在 macOS 菜单栏启用</p>
           </div>
         </div>
       </div>
@@ -634,7 +706,7 @@
 
       const mBtn = document.getElementById('masterToggleBtn');
       const anyRunning = tftpOn || ftpOn || syslogOn;
-      mBtn.textContent = anyRunning ? "Stop All Daemons" : "Start All Daemons";
+      mBtn.textContent = anyRunning ? "停止全部服务" : "启动全部服务";
       mBtn.style.background = anyRunning ? "#ef4444" : "#10b981";
     }
 
@@ -643,11 +715,11 @@
       const b = document.getElementById(btnId);
       const d = document.getElementById(dotId);
       if (s) {
-        s.textContent = isRunning ? "Running" : "Stopped";
+        s.textContent = isRunning ? "运行中" : "已停止";
         s.className = isRunning ? "status-badge" : "status-badge stopped";
       }
       if (b) {
-        b.textContent = isRunning ? "Stop" : "Start";
+        b.textContent = isRunning ? "停止" : "启动";
         b.className = isRunning ? "btn-toggle active" : "btn-toggle";
       }
       if (d) {
