@@ -129,19 +129,19 @@ swift build -c release
 chmod +x scripts/build_dmg.sh
 ./scripts/build_dmg.sh
 ```
-执行后将在 `build/` 目录下生成 `SysTFTP-macOS-1.0.0.dmg`。安装窗口采用浅色背景、中文拖拽提示和固定图标布局，将左侧 SysTFTP 拖到右侧「应用程序」即可安装。背景包含普通与 Retina 两种分辨率。首次运行时，如 macOS 提示自动化权限，请允许终端控制 Finder，以便保存安装窗口布局。
+执行后将在 `build/` 目录下生成 `SysTFTP-macOS-1.1.0.dmg`。安装窗口采用浅色背景、中文拖拽提示和固定图标布局，将左侧 SysTFTP 拖到右侧「应用程序」即可安装。背景包含普通与 Retina 两种分辨率。首次运行时，如 macOS 提示自动化权限，请允许终端控制 Finder，以便保存安装窗口布局。
 
 ### GitHub 自动发布
 
-项目包含 `.github/workflows/release.yml`。将 Gitea 仓库的分支和版本标签镜像到 GitHub，并启用 GitHub Actions 后，推送 `v1.0.0` 形式的标签即可自动构建并发布 DMG，无需额外配置发布 Token。工作流使用 macOS Runner 构建 Apple Silicon 与 Intel 双架构应用，在无图形界面的环境中生成同样的安装窗口，并上传 DMG 和 SHA-256 校验文件到 GitHub Releases。
+项目包含 `.github/workflows/release.yml`。将 Gitea 仓库的分支和版本标签镜像到 GitHub，并启用 GitHub Actions 后，推送 `v1.1.0` 形式的标签即可自动构建并发布 DMG，无需额外配置发布 Token。工作流使用 macOS Runner 构建 Apple Silicon 与 Intel 双架构应用，在无图形界面的环境中生成同样的安装窗口，并上传 DMG 和 SHA-256 校验文件到 GitHub Releases。
 
 发布新版本时，先更新 `SysTFTP/Resources/Info.plist` 中的 `CFBundleShortVersionString`，提交代码，再创建并推送对应标签。例如：
 
 ```bash
-# 将应用版本更新为 1.0.1 并提交后
-git tag -a v1.0.1 -m "Release v1.0.1"
+# 将应用版本更新为 1.1.0 并提交后
+git tag -a v1.1.0 -m "Release v1.1.0"
 git push origin main
-git push origin v1.0.1
+git push origin v1.1.0
 ```
 
 分支和标签镜像到 GitHub 后会触发发布。也可以在 GitHub 的 Actions 页面手动运行 `Publish macOS DMG`，输入已存在的版本标签，补发镜像前已有的版本。重复运行会更新同版本的附件。可将中文发布说明放在 `docs/releases/<版本标签>.md`；未提供时由 GitHub 自动生成说明。
