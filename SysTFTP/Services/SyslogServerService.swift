@@ -41,8 +41,8 @@ public final class SyslogServerService {
         
         let newListener = try NWListener(using: parameters, on: port)
         
-        newListener.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self = self, let newListener = newListener, self.listener === newListener else { return }
             switch state {
             case .ready:
                 self.delegate?.syslogServerDidLog("Syslog 服务正在监听 UDP 端口 \(self.config.port)", isError: false)
@@ -57,8 +57,12 @@ public final class SyslogServerService {
             }
         }
         
-        newListener.newConnectionHandler = { [weak self] connection in
-            self?.handleIncomingConnection(connection)
+        newListener.newConnectionHandler = { [weak self, weak newListener] connection in
+            guard let self = self, let newListener = newListener, self.listener === newListener else {
+                connection.cancel()
+                return
+            }
+            self.handleIncomingConnection(connection)
         }
         
         self.listener = newListener

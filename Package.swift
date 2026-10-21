@@ -27,13 +27,15 @@ let package = Package(
             ],
             resources: [
                 .process("Resources/Assets.xcassets"),
-                .copy("Resources/AppIcon.icns")
+                .copy("Resources/AppIcon.icns"),
+                .copy("Resources/port_forwarding.sh")
             ]
         ),
         .testTarget(
             name: "SysTFTPTests",
             dependencies: ["SysTFTP"],
-            path: "Tests"
+            path: "Tests",
+            exclude: ["PortForwardingHelperTests.py"]
         ),
     ]
 )

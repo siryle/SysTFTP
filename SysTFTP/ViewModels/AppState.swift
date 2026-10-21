@@ -48,10 +48,22 @@ public final class AppState: ObservableObject {
     @Published public var isSyslogServerRunning: Bool = false
     
     // Configurations
-    @Published public var tftpServerConfig = TFTPServerConfig()
+    @Published public var tftpServerConfig = TFTPServerConfig() {
+        didSet {
+            if oldValue.port != tftpServerConfig.port { defaults.set(tftpServerConfig.port, forKey: "ports.tftp") }
+        }
+    }
     @Published public var tftpClientConfig = TFTPClientConfig()
-    @Published public var ftpServerConfig = FTPServerConfig()
-    @Published public var syslogConfig = SyslogConfig()
+    @Published public var ftpServerConfig = FTPServerConfig() {
+        didSet {
+            if oldValue.port != ftpServerConfig.port { defaults.set(ftpServerConfig.port, forKey: "ports.ftp") }
+        }
+    }
+    @Published public var syslogConfig = SyslogConfig() {
+        didSet {
+            if oldValue.port != syslogConfig.port { defaults.set(syslogConfig.port, forKey: "ports.syslog") }
+        }
+    }
     
     // Data collections
     @Published public var tftpTransfers: [TFTPTransferItem] = []
@@ -78,13 +90,36 @@ public final class AppState: ObservableObject {
     public let ftpServerService = FTPServerService()
     public let syslogServerService = SyslogServerService()
     public let networkMonitor = NetworkMonitorService.shared
+    public let portForwarding = PortForwardingService()
     
+    private let defaults: UserDefaults
     private let maxLogCount = 1000
     private let maxSyslogCount = 2000
     
-    public init() {
+    public init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         setupDelegates()
         loadConfigs()
+    }
+
+    public var hasRunningServices: Bool {
+        isTFTPServerRunning || isFTPServerRunning || isSyslogServerRunning
+    }
+
+    public var currentPortPreset: ServerPortPreset? {
+        ServerPortPreset.allCases.first {
+            $0.matches(tftp: tftpServerConfig.port, ftp: ftpServerConfig.port, syslog: syslogConfig.port)
+        }
+    }
+
+    @discardableResult
+    public func applyPortPreset(_ preset: ServerPortPreset) -> Bool {
+        guard !hasRunningServices else { return false }
+        tftpServerConfig.port = preset.ports[0]
+        ftpServerConfig.port = preset.ports[1]
+        syslogConfig.port = preset.ports[2]
+        appendGeneralLog("已应用\(preset.title)：\(preset.summary)")
+        return true
     }
     
     private func setupDelegates() {
@@ -146,7 +181,10 @@ public final class AppState: ObservableObject {
     public func stopAllServices() {
         if isTFTPServerRunning { toggleTFTPServer() }
         if isFTPServerRunning { toggleFTPServer() }
-        if !isSyslogServerRunning { toggleSyslogServer() }
+        if isSyslogServerRunning { toggleSyslogServer() }
+        isTFTPServerRunning = false
+        isFTPServerRunning = false
+        isSyslogServerRunning = false
     }
     
     // MARK: - TFTP Client Actions
@@ -194,7 +232,12 @@ public final class AppState: ObservableObject {
     }
     
     private func loadConfigs() {
-        // Defaults initialized in properties
+        let tftp = defaults.integer(forKey: "ports.tftp")
+        let ftp = defaults.integer(forKey: "ports.ftp")
+        let syslog = defaults.integer(forKey: "ports.syslog")
+        if (1...65535).contains(tftp) { tftpServerConfig.port = tftp }
+        if (1...65535).contains(ftp) { ftpServerConfig.port = ftp }
+        if (1...65535).contains(syslog) { syslogConfig.port = syslog }
     }
 }
 

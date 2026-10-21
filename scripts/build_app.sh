@@ -86,6 +86,7 @@ cp "${FINAL_BIN}" "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 chmod +x "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
 
 cp "${PROJECT_DIR}/SysTFTP/Resources/Info.plist" "${APP_BUNDLE}/Contents/Info.plist"
+cp "${PROJECT_DIR}/SysTFTP/Resources/port_forwarding.sh" "${APP_BUNDLE}/Contents/Resources/port_forwarding.sh"
 
 if [ -f "${PROJECT_DIR}/Assets/SysTFTP.icns" ]; then
     cp "${PROJECT_DIR}/Assets/SysTFTP.icns" "${APP_BUNDLE}/Contents/Resources/AppIcon.icns"

@@ -44,8 +44,8 @@ public final class FTPServerService {
         
         let newListener = try NWListener(using: parameters, on: port)
         
-        newListener.stateUpdateHandler = { [weak self] state in
-            guard let self = self else { return }
+        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
+            guard let self = self, let newListener = newListener, self.listener === newListener else { return }
             switch state {
             case .ready:
                 self.delegate?.ftpServerDidLog("FTP 服务正在监听 TCP 端口 \(self.config.port)", isError: false)
@@ -60,8 +60,12 @@ public final class FTPServerService {
             }
         }
         
-        newListener.newConnectionHandler = { [weak self] connection in
-            self?.handleNewClient(connection)
+        newListener.newConnectionHandler = { [weak self, weak newListener] connection in
+            guard let self = self, let newListener = newListener, self.listener === newListener else {
+                connection.cancel()
+                return
+            }
+            self.handleNewClient(connection)
         }
         
         self.listener = newListener
@@ -73,11 +77,12 @@ public final class FTPServerService {
         listener = nil
         
         sessionLock.lock()
-        for session in activeSessions.values {
-            session.disconnect()
-        }
+        let sessions = Array(activeSessions.values)
         activeSessions.removeAll()
         sessionLock.unlock()
+
+        // Disconnect callbacks also acquire sessionLock.
+        for session in sessions { session.disconnect() }
         
         delegate?.ftpServerDidLog("FTP 服务已停止。", isError: false)
         delegate?.ftpServerStatusChanged(isRunning: false, port: config.port)

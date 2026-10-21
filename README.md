@@ -152,26 +152,22 @@ Git 仓库镜像同步代码与标签；GitHub 的 Release 和 DMG 附件由工�
 
 ## 🔒 macOS 特权端口 (< 1024) 解决方案
 
-macOS 属于类 UNIX 系统，默认限制 1024 以下端口（TFTP 的 `69`，FTP 的 `21`，Syslog 的 `514`）需要特权身份。SysTFTP 为您提供三种最优雅的解决途径：
+如果服务监听标准端口时提示权限不足，可在应用的「设置」页直接处理：
 
-1. **一键切换非特权端口（推荐新手）**：
-   - 在 SysTFTP 的「Settings」界面中，支持一键切换到 **用户态端口**：
-     - TFTP: `6969`
-     - FTP: `2121`
-     - Syslog: `5140`
-   - 完全不需要输入管理员密码，开箱即用！
+1. **设备支持自定义端口：点击「应用普通端口」**。TFTP、FTP、Syslog 分别切换到 `6969`、`2121`、`5140`，无需管理员密码。卡片会显示「当前使用／已应用」，并展示操作结果；连接设备也需填写这些端口。端口配置会自动保存，重新打开应用后仍会恢复。
+2. **设备必须使用标准端口：点击「一键解决特权端口…」**。通过 macOS 管理员授权后，应用会切换到普通端口，同时启用 IPv4 转发：UDP `69 → 6969`、TCP `21 → 2121`、UDP `514 → 5140`。其他设备仍可通过标准端口连接本机，SysTFTP 本身继续以普通用户权限运行。应用内还提供「检查转发状态…」和「关闭转发…」按钮。
 
-2. **使用内置 pf 端口转发（推荐网络工程师）**：
-   - 运行我们随附的 `scripts/install_port_forwarding.sh`：
-     ```bash
-     sudo ./scripts/install_port_forwarding.sh
-     ```
-   - 该脚本利用 macOS 内核的 Packet Filter，将外网到 69/21/514 的 UDP/TCP 流量透明转发给 SysTFTP 的 6969/2121/5140。交换机依然访问标准端口，而 SysTFTP 保持在用户权限安全运行！
+如有服务正在运行，切换前会提示确认停止，以免显示端口与实际监听端口不一致；应用后请重新启动需要的服务。取消管理员授权不会停止服务或修改端口配置。
 
-3. **以特权权限启动**：
-   ```bash
-   sudo /Applications/SysTFTP.app/Contents/MacOS/SysTFTP
-   ```
+转发仅管理 SysTFTP 自己的 PF 规则和启用引用，不替换系统主规则，也不全局关闭 PF。系统主规则缺少所需转发入口时会提示错误，需管理员检查自定义防火墙配置。退出应用不会关闭转发，重启 macOS 后需重新启用。转发适用于其他设备发往本机的 IPv4 连接；本机测试请直接使用普通端口。
+
+也可通过命令行管理同一套规则：
+
+```bash
+bash scripts/install_port_forwarding.sh enable
+bash scripts/install_port_forwarding.sh status
+bash scripts/install_port_forwarding.sh disable
+```
 
 ---
 
