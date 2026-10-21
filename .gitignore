@@ -1,0 +1,22 @@
+# Xcode & Swift
+.build/
+build/
+DerivedData/
+*.xcuserstate
+project.xcworkspace/
+xcuserdata/
+*.bundle
+
+# macOS
+.DS_Store
+.Trashes
+*.swp
+*~
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local temp
+tmp/
+*.log

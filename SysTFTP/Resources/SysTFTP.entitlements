@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Network server entitlement -->
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<!-- Network client entitlement -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- File user selected access -->
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<!-- Downloads folder access -->
+	<key>com.apple.security.files.downloads.read-write</key>
+	<true/>
+</dict>
+</plist>
