@@ -72,15 +72,30 @@ struct PortSettingsView: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            FormSectionView(title: "端口预设与权限") {
-                Text("点击下方“应用”按钮切换三个服务的监听端口。普通端口无需管理员权限；设备连接时也需填写对应端口。")
-                    .foregroundColor(.secondary)
-                Text("当前配置：TFTP \(String(appState.tftpServerConfig.port)) · FTP \(String(appState.ftpServerConfig.port)) · Syslog \(String(appState.syslogConfig.port))")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .textSelection(.enabled)
-
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible())], spacing: 16) {
-                    ForEach(ServerPortPreset.allCases) { preset in portPreset(preset) }
+            FormSectionView(title: "设备访问与应用监听") {
+                if forwarding.status == .enabled {
+                    ForwardedPortSummaryView(listeningPorts: listeningPorts)
+                    if appState.currentPortPreset != .unprivileged {
+                        Button("应用转发所需的监听端口") { requestPreset(.unprivileged) }
+                            .disabled(forwarding.isBusy)
+                    }
+                    Text("如需更换应用监听端口，请先关闭下方的标准端口转发。")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("下方预设设置 SysTFTP 的监听端口。未启用系统转发时，其他设备使用相同端口连接本机。")
+                        .foregroundColor(.secondary)
+                    Text("应用监听端口：\(listeningSummary)")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .textSelection(.enabled)
+                    if forwarding.status == .unknown {
+                        Text("系统转发状态尚未检查；若此前启用过，请先点击下方“检查转发状态…”。")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible())], spacing: 16) {
+                        ForEach(ServerPortPreset.allCases) { preset in portPreset(preset) }
+                    }
                 }
                 if !feedbackIsForwarding { feedbackBanner }
                 Text("端口会自动保存。切换运行中的服务时，会先确认停止服务；应用后请重新启动服务。")
@@ -90,7 +105,7 @@ struct PortSettingsView: View {
 
             FormSectionView(title: "一键解决特权端口") {
                 Label(forwardingStatus, systemImage: forwarding.status == .enabled ? "checkmark.shield.fill" : "shield")
-                    .foregroundColor(forwarding.status == .enabled ? Color.green : Color.secondary)
+                    .foregroundColor(forwarding.status == .enabled ? (appState.currentPortPreset == .unprivileged ? Color.green : Color.orange) : Color.secondary)
                     .font(.system(size: 13, weight: .medium))
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { forwardingButtons }
@@ -169,33 +184,45 @@ struct PortSettingsView: View {
         case .unknown: return "转发状态尚未检查"
         case .enabled:
             return appState.currentPortPreset == .unprivileged
-                ? "标准端口转发已启用"
-                : "转发已启用；请将应用切换到普通端口"
+                ? "标准端口访问已启用，由系统转发至应用监听端口"
+                : "系统转发已启用，应用监听端口需要修复"
         case .disabled: return "标准端口转发未启用"
+        }
+    }
+
+    private var listeningPorts: [Int] {
+        [appState.tftpServerConfig.port, appState.ftpServerConfig.port, appState.syslogConfig.port]
+    }
+
+    private var listeningSummary: String {
+        "TFTP \(listeningPorts[0]) · FTP \(listeningPorts[1]) · Syslog \(listeningPorts[2])"
+    }
+
+    private func requestPreset(_ preset: ServerPortPreset) {
+        feedbackIsForwarding = false
+        if preset == .standard && forwarding.status == .enabled {
+            report("请先关闭端口转发，再应用标准端口，避免转发目标与监听端口不一致。", isError: true)
+        } else if appState.currentPortPreset == preset {
+            report("应用监听端口已设为\(preset.title)：\(preset.summary)。")
+        } else if appState.hasRunningServices {
+            pendingAction = .preset(preset)
+            showsStopConfirmation = true
+        } else {
+            apply(preset)
         }
     }
 
     private func portPreset(_ preset: ServerPortPreset) -> some View {
         let selected = appState.currentPortPreset == preset
         return Button {
-            feedbackIsForwarding = false
-            if preset == .standard && forwarding.status == .enabled {
-                report("请先关闭端口转发，再应用标准端口，避免转发目标与监听端口不一致。", isError: true)
-            } else if selected {
-                report("当前已使用\(preset.title)：\(preset.summary)。")
-            } else if appState.hasRunningServices {
-                pendingAction = .preset(preset)
-                showsStopConfirmation = true
-            } else {
-                apply(preset)
-            }
+            requestPreset(preset)
         } label: {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(preset.title).font(.system(size: 14, weight: .semibold))
                     Spacer()
                     if selected {
-                        Label("当前使用", systemImage: "checkmark.circle.fill")
+                        Label("应用监听", systemImage: "checkmark.circle.fill")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.accentColor)
                     }
@@ -216,7 +243,7 @@ struct PortSettingsView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                Label(selected ? "已应用" : "应用\(preset.title)", systemImage: selected ? "checkmark" : "arrow.triangle.2.circlepath")
+                Label(selected ? "已设为监听端口" : "应用\(preset.title)", systemImage: selected ? "checkmark" : "arrow.triangle.2.circlepath")
                     .font(.system(size: 12, weight: .semibold))
                     .foregroundColor(.accentColor)
                     .frame(maxWidth: .infinity)
@@ -242,9 +269,14 @@ struct PortSettingsView: View {
             report("请先停止运行中的服务，再切换端口。", isError: true)
             return
         }
-        let hint = preset == .unprivileged
-            ? "连接设备时请使用上述普通端口；如需继续使用标准端口，可启用下方的系统转发。"
-            : "若服务提示权限不足，请使用普通端口，或启用下方的系统转发。"
+        let hint: String
+        if forwarding.status == .enabled {
+            hint = "标准端口访问已启用，其他设备仍使用 69 / 21 / 514；应用监听 6969 / 2121 / 5140。"
+        } else if preset == .unprivileged {
+            hint = "未启用系统转发时，其他设备使用上述普通端口；如需标准端口访问，可启用下方的系统转发。"
+        } else {
+            hint = "若服务提示权限不足，请使用普通端口，或启用下方的系统转发。"
+        }
         report("\(stoppedServices ? "已停止服务，" : "")已应用\(preset.title)：\(preset.summary)。配置已保存，请启动需要的服务。\(hint)")
     }
 
@@ -261,11 +293,15 @@ struct PortSettingsView: View {
                     }
                     if mayStopServices { appState.stopAllServices() }
                     guard appState.applyPortPreset(.unprivileged) else { return }
-                    report("标准端口转发已启用，应用已切换到 6969 / 2121 / 5140。请启动需要的服务，其他设备可继续使用 69 / 21 / 514 访问本机。")
+                    report("标准端口访问已启用。其他设备使用 69 / 21 / 514，应用监听 6969 / 2121 / 5140。请启动需要的服务。")
                 } else if status == .enabled {
-                    report("已确认标准端口转发正在运行，转发目标为 6969 / 2121 / 5140。")
+                    if appState.currentPortPreset == .unprivileged {
+                        report("已确认标准端口访问已启用：设备连接 69 / 21 / 514，系统转发至应用监听的 6969 / 2121 / 5140。")
+                    } else {
+                        report("系统转发已启用，但应用监听端口与转发目标不一致。请点击“应用转发所需的监听端口”，再启动服务。", isError: true)
+                    }
                 } else {
-                    report("标准端口转发未启用。使用普通端口时，连接设备需填写 6969 / 2121 / 5140；应用的当前端口配置保持不变。")
+                    report("标准端口转发未启用。其他设备需使用应用监听端口连接：\(listeningSummary)。")
                 }
             } catch {
                 report(error.localizedDescription, isError: true)
@@ -277,5 +313,61 @@ struct PortSettingsView: View {
         feedback = message
         feedbackIsError = isError
         appState.appendGeneralLog(message)
+    }
+}
+
+struct ForwardedPortSummaryView: View {
+    let listeningPorts: [Int]
+
+    private var matchesTarget: Bool {
+        listeningPorts == ServerPortPreset.unprivileged.ports
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(matchesTarget ? "标准端口访问已启用" : "系统转发已启用，监听配置待修复",
+                  systemImage: matchesTarget ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(matchesTarget ? Color.green : Color.orange)
+            Text("其他设备 → 本机标准端口 → macOS 系统转发 → 应用监听端口")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 16), GridItem(.flexible())], spacing: 16) {
+                portSummary(title: "设备访问端口", subtitle: "其他设备通过本机 IPv4 地址连接",
+                            ports: ServerPortPreset.standard.ports, highlighted: true)
+                portSummary(title: "应用监听端口", subtitle: "SysTFTP 接收系统转发的请求",
+                            ports: listeningPorts, highlighted: false)
+            }
+            Text(matchesTarget
+                 ? "应用监听普通端口是标准端口转发的必要配置。启动服务后，其他设备仍使用左侧标准端口；本机测试使用右侧监听端口。"
+                 : "系统转发目标固定为 6969 / 2121 / 5140，与当前监听配置不一致。请应用转发所需的监听端口，再启动服务。")
+                .font(.system(size: 12))
+                .foregroundColor(matchesTarget ? Color.secondary : Color.orange)
+        }
+        .accessibilityIdentifier("forwarded-port-summary")
+    }
+
+    private func portSummary(title: String, subtitle: String, ports: [Int], highlighted: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.system(size: 14, weight: .semibold))
+            Text(subtitle)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            Divider()
+            HStack(spacing: 12) {
+                ForEach(Array(zip(["TFTP", "FTP", "Syslog"], ports)), id: \.0) { name, port in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(name).font(.system(size: 11)).foregroundColor(.secondary)
+                        Text(String(port)).font(.system(size: 13, weight: .medium, design: .monospaced))
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(highlighted ? Color.green.opacity(0.05) : Color(NSColor.textBackgroundColor))
+        .cornerRadius(9)
+        .overlay(RoundedRectangle(cornerRadius: 9).stroke(highlighted ? Color.green.opacity(0.5) : Color.secondary.opacity(0.2)))
     }
 }
