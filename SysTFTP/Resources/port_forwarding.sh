@@ -14,12 +14,29 @@ if [ "$(/usr/bin/id -u)" -ne 0 ]; then
 fi
 
 enabled() {
-    /sbin/pfctl -s info 2>/dev/null | /usr/bin/grep -q '^Status: Enabled' &&
-    [ "$(/sbin/pfctl -a "$ANCHOR" -s nat 2>/dev/null | /usr/bin/grep -c '^rdr pass' || true)" -eq 3 ]
+    info="$(/sbin/pfctl -s info 2>/dev/null)" || return 2
+    printf '%s\n' "$info" | /usr/bin/grep -q '^Status: Enabled' || return 1
+    rules="$(/sbin/pfctl -a "$ANCHOR" -s nat 2>/dev/null)" || return 2
+    # PF expands "self" into multiple addresses; validate mappings, not rule count.
+    printf '%s\n' "$rules" | /usr/bin/awk '
+        /^rdr pass on ! lo0 inet proto udp / && / port (= )?69 -> 127[.]0[.]0[.]1 port 6969([[:space:]]|$)/ { tftp = 1 }
+        /^rdr pass on ! lo0 inet proto tcp / && / port (= )?21 -> 127[.]0[.]0[.]1 port 2121([[:space:]]|$)/ { ftp = 1 }
+        /^rdr pass on ! lo0 inet proto udp / && / port (= )?514 -> 127[.]0[.]0[.]1 port 5140([[:space:]]|$)/ { syslog = 1 }
+        END { exit !(tftp && ftp && syslog) }
+    '
 }
 
 if [ "$ACTION" = status ]; then
-    if enabled; then echo SYSTFTP_PF_ENABLED; else echo SYSTFTP_PF_DISABLED; fi
+    if enabled; then
+        echo SYSTFTP_PF_ENABLED
+    else
+        result=$?
+        if [ "$result" -ne 1 ]; then
+            echo "无法读取系统 PF 状态，请检查系统防火墙后重试。" >&2
+            exit 1
+        fi
+        echo SYSTFTP_PF_DISABLED
+    fi
     exit 0
 fi
 

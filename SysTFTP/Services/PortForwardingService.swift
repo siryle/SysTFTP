@@ -58,11 +58,8 @@ public final class PortForwardingService: ObservableObject {
                 process.waitUntilExit()
                 guard process.terminationStatus == 0 else {
                     let message = String(decoding: diagnostics, as: UTF8.self)
-                    let description = message.contains("(-128)")
-                        ? "已取消管理员授权，未应用此次操作。"
-                        : "端口转发操作失败：\(message.trimmingCharacters(in: .whitespacesAndNewlines))"
                     throw NSError(domain: "SysTFTP.PortForwarding", code: Int(process.terminationStatus),
-                                  userInfo: [NSLocalizedDescriptionKey: description])
+                                  userInfo: [NSLocalizedDescriptionKey: Self.failureDescription(message)])
                 }
                 return String(decoding: response, as: UTF8.self)
             }.value
@@ -82,6 +79,28 @@ public final class PortForwardingService: ObservableObject {
 
     static func shellQuote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    nonisolated static func failureDescription(_ diagnostics: String) -> String {
+        if diagnostics.contains("(-128)") {
+            return "已取消管理员授权，未应用此次操作。"
+        }
+        // These pfctl notices are informational; keep actual errors in the UI.
+        let notices: Set<String> = [
+            "No ALTQ support in kernel",
+            "ALTQ related functions disabled",
+            "pfctl: Use of -f option, could result in flushing of rules",
+            "present in the main ruleset added by the system at startup.",
+            "See /etc/pf.conf for further details."
+        ]
+        let message = diagnostics
+            .replacingOccurrences(of: #"^\d+:\d+: execution error: "#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*\(-?\d+\)\s*$"#, with: "", options: .regularExpression)
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && !notices.contains($0) }
+            .joined(separator: "\n")
+        return "端口转发操作失败：\(message.isEmpty ? "请检查系统防火墙配置后重试。" : message)"
     }
 
     private func failure(_ message: String) -> NSError {
