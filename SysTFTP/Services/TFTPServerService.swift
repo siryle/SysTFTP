@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 public protocol TFTPServerDelegate: AnyObject {
     func tftpServerDidLog(_ message: String, isError: Bool)
@@ -9,546 +8,435 @@ public protocol TFTPServerDelegate: AnyObject {
 
 public final class TFTPServerService {
     public weak var delegate: TFTPServerDelegate?
-    
+    public private(set) var listeningPort: Int = 0
+
     private var config: TFTPServerConfig
-    private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.systftp.server.tftp", qos: .userInitiated)
-    
-    // Active transfers map: "clientIP:clientPort" -> TransferSession
-    private var activeSessions: [String: TFTPSession] = [:]
-    private let sessionLock = NSLock()
-    
+    private let lock = NSLock()
+    private var socket: UDPSocket?
+    private var generation = 0
+    private var sessions: [String: TFTPSession] = [:]
+
     public init(config: TFTPServerConfig = TFTPServerConfig()) {
         self.config = config
     }
-    
+
     public func updateConfig(_ config: TFTPServerConfig) {
+        lock.lock()
+        var config = config
+        if socket != nil { config.port = self.config.port }
         self.config = config
+        lock.unlock()
     }
-    
+
     public func start() throws {
         stop()
-        
-        // Ensure root directory exists
+        guard (0...65535).contains(config.port) else {
+            throw UDPError(description: "无效端口号：\(config.port)")
+        }
         let rootURL = URL(fileURLWithPath: config.rootDirectory)
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
-        
-        let parameters = NWParameters.udp
-        parameters.allowLocalEndpointReuse = true
-        
-        guard let port = NWEndpoint.Port(rawValue: UInt16(config.port)) else {
-            throw NSError(domain: "TFTPServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "无效端口号：\(config.port)"])
-        }
-        
-        let newListener = try NWListener(using: parameters, on: port)
-        
-        newListener.stateUpdateHandler = { [weak self, weak newListener] state in
-            guard let self = self, let newListener = newListener, self.listener === newListener else { return }
-            switch state {
-            case .ready:
-                self.delegate?.tftpServerDidLog("TFTP 服务正在监听 UDP 端口 \(self.config.port)，根目录：\(self.config.rootDirectory)", isError: false)
-                self.delegate?.tftpServerStatusChanged(isRunning: true, port: self.config.port)
-            case .failed(let error):
-                self.delegate?.tftpServerDidLog("TFTP 服务启动失败：\(error.localizedDescription)（端口 \(self.config.port) 可能需要管理员权限或已被占用）", isError: true)
-                self.delegate?.tftpServerStatusChanged(isRunning: false, port: self.config.port)
-            case .cancelled:
-                self.delegate?.tftpServerStatusChanged(isRunning: false, port: self.config.port)
-            default:
-                break
-            }
-        }
-        
-        newListener.newConnectionHandler = { [weak self, weak newListener] connection in
-            guard let self = self, let newListener = newListener, self.listener === newListener else {
-                connection.cancel()
-                return
-            }
-            self.handleIncomingConnection(connection)
-        }
-        
-        self.listener = newListener
-        newListener.start(queue: queue)
+        let opened = try UDPSocket(port: UInt16(config.port))
+        let port = Int(opened.localPort())
+        lock.lock()
+        generation += 1
+        let token = generation
+        socket = opened
+        listeningPort = port
+        lock.unlock()
+        delegate?.tftpServerDidLog("TFTP 服务正在监听 UDP 端口 \(port)，根目录：\(config.rootDirectory)", isError: false)
+        delegate?.tftpServerStatusChanged(isRunning: true, port: port)
+        queue.async { [weak self] in self?.acceptLoop(token) }
     }
-    
+
     public func stop() {
-        listener?.cancel()
-        listener = nil
-        
-        sessionLock.lock()
-        for session in activeSessions.values {
-            session.cancel()
-        }
-        activeSessions.removeAll()
-        sessionLock.unlock()
-        
+        lock.lock()
+        generation += 1
+        let opened = socket
+        socket = nil
+        listeningPort = 0
+        let active = Array(sessions.values)
+        sessions.removeAll()
+        let port = config.port
+        lock.unlock()
+        opened?.close()
+        active.forEach { $0.cancel() }
+        guard opened != nil else { return }
         delegate?.tftpServerDidLog("TFTP 服务已停止。", isError: false)
-        delegate?.tftpServerStatusChanged(isRunning: false, port: config.port)
+        delegate?.tftpServerStatusChanged(isRunning: false, port: port)
     }
-    
-    private func handleIncomingConnection(_ connection: NWConnection) {
-        connection.start(queue: queue)
-        receivePacket(on: connection)
-    }
-    
-    private func receivePacket(on connection: NWConnection) {
-        connection.receiveMessage { [weak self] content, context, isComplete, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                self.delegate?.tftpServerDidLog("TFTP 接收错误：\(error.localizedDescription)", isError: true)
-                connection.cancel()
-                return
-            }
-            
-            guard let data = content, !data.isEmpty else {
-                return
-            }
-            
-            self.processPacket(data: data, connection: connection)
+
+    private func acceptLoop(_ token: Int) {
+        while true {
+            lock.lock()
+            let current = generation == token ? socket : nil
+            let activeConfig = config
+            lock.unlock()
+            guard let current else { return }
+            guard let (data, peer) = current.receive(timeout: 0.5) else { continue }
+            handle(data, from: peer, config: activeConfig)
         }
     }
-    
-    private func processPacket(data: Data, connection: NWConnection) {
-        guard data.count >= 2 else { return }
-        let opcode = UInt16(data[0]) << 8 | UInt16(data[1])
-        
-        var clientIP = "未知"
-        var clientPort: UInt16 = 0
-        if case .hostPort(let host, let port) = connection.endpoint {
-            clientIP = "\(host)"
-            clientPort = port.rawValue
-        }
-        let sessionKey = "\(clientIP):\(clientPort)"
-        
-        switch opcode {
-        case 1: // RRQ (Read Request / Download)
-            handleRRQ(data: data.subdata(in: 2..<data.count), clientIP: clientIP, clientPort: clientPort, connection: connection, sessionKey: sessionKey)
-        case 2: // WRQ (Write Request / Upload)
-            handleWRQ(data: data.subdata(in: 2..<data.count), clientIP: clientIP, clientPort: clientPort, connection: connection, sessionKey: sessionKey)
-        case 3: // DATA (Write upload incoming data)
-            sessionLock.lock()
-            let session = activeSessions[sessionKey]
-            sessionLock.unlock()
-            session?.handleDataPacket(data: data)
-        case 4: // ACK (Read download ack from client)
-            sessionLock.lock()
-            let session = activeSessions[sessionKey]
-            sessionLock.unlock()
-            session?.handleAckPacket(data: data)
-        case 5: // ERROR
-            let errorMsg = parseErrorMessage(data: data)
-            delegate?.tftpServerDidLog("收到来自 \(sessionKey) 的 TFTP 错误：\(errorMsg)", isError: true)
-            sessionLock.lock()
-            activeSessions.removeValue(forKey: sessionKey)?.cancel()
-            sessionLock.unlock()
-        default:
-            sendError(connection: connection, code: 4, message: "Illegal TFTP operation")
-        }
-    }
-    
-    private func handleRRQ(data: Data, clientIP: String, clientPort: UInt16, connection: NWConnection, sessionKey: String) {
-        let (filename, mode, options) = parseRequest(data: data)
-        delegate?.tftpServerDidLog("TFTP 下载请求（RRQ）：'\(filename)'，客户端 \(clientIP):\(clientPort)，模式=\(mode)，选项=\(options)", isError: false)
-        
-        let safePath = resolveSafePath(filename: filename)
-        guard let fileURL = safePath, FileManager.default.fileExists(atPath: fileURL.path) else {
-            sendError(connection: connection, code: 1, message: "File not found: \(filename)")
-            delegate?.tftpServerDidLog("TFTP 文件不存在：\(filename)", isError: true)
-            return
-        }
-        
-        guard let fileData = try? Data(contentsOf: fileURL) else {
-            sendError(connection: connection, code: 2, message: "Access violation reading file")
-            return
-        }
-        
-        let transferItem = TFTPTransferItem(
-            filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
-            direction: .download,
-            bytesTransferred: 0,
-            totalBytes: Int64(fileData.count),
-            status: .inProgress
+
+    private func handle(_ data: Data, from peer: IPv4Peer, config: TFTPServerConfig) {
+        guard let opcode = TFTPPackets.opcode(of: data), opcode == 1 || opcode == 2 else { return }
+        let key = "\(peer.ipString):\(peer.port)"
+        lock.lock()
+        let exists = sessions[key] != nil
+        lock.unlock()
+        if exists { return }
+        guard let request = TFTPPackets.requestFields(data) else { return }
+        let direction: TFTPTransferDirection = opcode == 1 ? .download : .upload
+        delegate?.tftpServerDidLog(
+            "TFTP \(direction == .download ? "下载" : "上传")请求：'\(request.filename)'，客户端 \(key)，模式=\(request.mode)，选项=\(request.options)",
+            isError: false
         )
-        self.delegate?.tftpServerTransferUpdated(transferItem)
-        
-        let session = TFTPSession(
-            sessionKey: sessionKey,
-            filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
-            direction: .download,
-            fileData: fileData,
-            fileURL: fileURL,
-            options: options,
-            config: config,
-            connection: connection,
-            onUpdate: { [weak self] updatedItem in
-                self?.delegate?.tftpServerTransferUpdated(updatedItem)
-            },
-            onFinish: { [weak self] item in
-                self?.sessionLock.lock()
-                self?.activeSessions.removeValue(forKey: sessionKey)
-                self?.sessionLock.unlock()
-                self?.delegate?.tftpServerTransferUpdated(item)
-                self?.delegate?.tftpServerDidLog("TFTP 下载完成：\(item.filename) → \(item.clientIP)（\(item.bytesTransferred) 字节）", isError: false)
-            }
-        )
-        
-        sessionLock.lock()
-        activeSessions[sessionKey] = session
-        sessionLock.unlock()
-        
-        session.startReadTransfer()
-    }
-    
-    private func handleWRQ(data: Data, clientIP: String, clientPort: UInt16, connection: NWConnection, sessionKey: String) {
-        let (filename, mode, options) = parseRequest(data: data)
-        delegate?.tftpServerDidLog("TFTP 上传请求（WRQ）：'\(filename)'，客户端 \(clientIP):\(clientPort)，模式=\(mode)，选项=\(options)", isError: false)
-        
-        guard let fileURL = resolveSafePath(filename: filename) else {
-            sendError(connection: connection, code: 2, message: "Access violation / Invalid filename path")
+        guard TFTPPackets.isOctet(request.mode) else {
+            replyError(5, "Only octet mode is supported", to: peer)
             return
         }
-        
-        if FileManager.default.fileExists(atPath: fileURL.path) && !config.allowOverwrite {
-            sendError(connection: connection, code: 6, message: "File already exists and overwrite is disabled")
-            delegate?.tftpServerDidLog("TFTP 已阻止覆盖文件：\(filename)", isError: true)
+        guard let fileURL = safeFileURL(request.filename, config: config) else {
+            replyError(2, "Access violation", to: peer)
             return
         }
-        
-        if config.allowCreateDir {
-            let parentDir = fileURL.deletingLastPathComponent()
-            try? FileManager.default.createDirectory(at: parentDir, withIntermediateDirectories: true)
+        if direction == .download && !FileManager.default.fileExists(atPath: fileURL.path) {
+            replyError(1, "File not found", to: peer)
+            delegate?.tftpServerDidLog("TFTP 文件不存在：\(request.filename)", isError: true)
+            return
         }
-        
-        let expectedSize = options["tsize"].flatMap { Int64($0) }
-        
-        let session = TFTPSession(
-            sessionKey: sessionKey,
-            filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
-            direction: .upload,
-            fileData: Data(),
-            fileURL: fileURL,
-            options: options,
-            config: config,
-            connection: connection,
-            onUpdate: { [weak self] updatedItem in
-                self?.delegate?.tftpServerTransferUpdated(updatedItem)
-            },
-            onFinish: { [weak self] item in
-                self?.sessionLock.lock()
-                self?.activeSessions.removeValue(forKey: sessionKey)
-                self?.sessionLock.unlock()
-                self?.delegate?.tftpServerTransferUpdated(item)
-                self?.delegate?.tftpServerDidLog("TFTP 上传完成：\(item.filename) ← \(item.clientIP)（\(item.bytesTransferred) 字节）", isError: false)
-            }
-        )
-        
-        sessionLock.lock()
-        activeSessions[sessionKey] = session
-        sessionLock.unlock()
-        
-        session.startWriteTransfer(expectedSize: expectedSize)
+        if direction == .upload && FileManager.default.fileExists(atPath: fileURL.path) && !config.allowOverwrite {
+            replyError(6, "File already exists", to: peer)
+            delegate?.tftpServerDidLog("TFTP 已阻止覆盖文件：\(request.filename)", isError: true)
+            return
+        }
+        if direction == .upload && config.allowCreateDir {
+            try? FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        let session: TFTPSession
+        do {
+            session = try TFTPSession(
+                key: key,
+                peer: peer,
+                filename: request.filename,
+                fileURL: fileURL,
+                direction: direction,
+                options: request.options,
+                config: config,
+                onUpdate: { [weak self] item in self?.delegate?.tftpServerTransferUpdated(item) },
+                onFinish: { [weak self] item in
+                    self?.lock.lock()
+                    self?.sessions.removeValue(forKey: key)
+                    self?.lock.unlock()
+                    self?.delegate?.tftpServerTransferUpdated(item)
+                    let verb = item.direction == .download ? "下载" : "上传"
+                    let failed = item.status == .failed || item.status == .aborted
+                    self?.delegate?.tftpServerDidLog(
+                        failed ? "TFTP \(verb)失败：\(item.filename)（\(item.errorMessage ?? item.status.displayName)）" : "TFTP \(verb)完成：\(item.filename)（\(item.bytesTransferred) 字节）",
+                        isError: failed
+                    )
+                }
+            )
+        } catch {
+            replyError(0, "Unable to start transfer", to: peer)
+            delegate?.tftpServerDidLog("TFTP 无法开始传输：\(error.localizedDescription)", isError: true)
+            return
+        }
+        lock.lock()
+        if generation == 0 || socket == nil {
+            lock.unlock()
+            session.cancel()
+            return
+        }
+        sessions[key] = session
+        lock.unlock()
+        session.start()
     }
-    
-    private func resolveSafePath(filename: String) -> URL? {
-        let rootURL = URL(fileURLWithPath: config.rootDirectory).standardized
-        let cleanName = filename.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
-        guard !cleanName.contains("..") else { return nil }
-        
-        // Security: Block 3CDaemon config overwrite attempts as specified in Rev 7
-        let lower = cleanName.lowercased()
+
+    private func safeFileURL(_ filename: String, config: TFTPServerConfig) -> URL? {
+        let clean = filename.replacingOccurrences(of: "\\", with: "/").trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        guard !clean.isEmpty, !clean.contains(".."), !clean.contains("\0") else { return nil }
+        let lower = clean.lowercased()
         if lower == "3cdaemon.ini" || lower == "profiles.ftp" || lower == "noaccess.ftp" || lower.hasSuffix(".plist") {
             return nil
         }
-        
-        let targetURL = rootURL.appendingPathComponent(cleanName).standardized
-        if targetURL.path.hasPrefix(rootURL.path) {
-            return targetURL
-        }
-        return nil
+        guard let path = PathJail.resolve(root: config.rootDirectory, relative: clean) else { return nil }
+        return URL(fileURLWithPath: path)
     }
-    
-    private func parseRequest(data: Data) -> (filename: String, mode: String, options: [String: String]) {
-        var strings: [String] = []
-        var current = Data()
-        for byte in data {
-            if byte == 0 {
-                if let str = String(data: current, encoding: .utf8) ?? String(data: current, encoding: .isoLatin1) {
-                    strings.append(str)
-                }
-                current.removeAll()
-            } else {
-                current.append(byte)
-            }
-        }
-        
-        let filename = strings.indices.contains(0) ? strings[0] : ""
-        let mode = strings.indices.contains(1) ? strings[1].lowercased() : "octet"
-        
-        var options: [String: String] = [:]
-        var i = 2
-        while i + 1 < strings.count {
-            let key = strings[i].lowercased()
-            let val = strings[i+1]
-            options[key] = val
-            i += 2
-        }
-        
-        return (filename, mode, options)
-    }
-    
-    private func parseErrorMessage(data: Data) -> String {
-        guard data.count > 4 else { return "未知错误" }
-        let msgData = data.subdata(in: 4..<data.count)
-        return String(data: msgData, encoding: .utf8) ?? "TFTP 错误代码 \(data[2])\(data[3])"
-    }
-    
-    private func sendError(connection: NWConnection, code: UInt16, message: String) {
-        var packet = Data([0x00, 0x05, UInt8(code >> 8), UInt8(code & 0xFF)])
-        if let msgData = message.data(using: .utf8) {
-            packet.append(msgData)
-        }
-        packet.append(0x00)
-        connection.send(content: packet, completion: .contentProcessed({ _ in
-            connection.cancel()
-        }))
+
+    private func replyError(_ code: UInt16, _ message: String, to peer: IPv4Peer) {
+        guard let reply = try? UDPSocket(port: 0) else { return }
+        try? reply.send(TFTPPackets.error(code: code, message: message), to: peer)
+        reply.close()
     }
 }
 
-// Inner helper class managing a single TFTP transfer session
 private final class TFTPSession {
-    let sessionKey: String
+    let key: String
     let filename: String
-    let clientIP: String
-    let clientPort: UInt16
-    let direction: TFTPTransferDirection
-    var fileData: Data
     let fileURL: URL
-    let options: [String: String]
-    let config: TFTPServerConfig
-    let connection: NWConnection
+    let direction: TFTPTransferDirection
     let onUpdate: (TFTPTransferItem) -> Void
     let onFinish: (TFTPTransferItem) -> Void
-    
-    var blksize: Int = 512
-    var timeoutSeconds: Int = 5
-    var currentBlock: UInt16 = 0
-    var isCancelled: Bool = false
-    var lastActivityTime: Date = Date()
-    var bytesTransferred: Int64 = 0
-    var totalBytes: Int64?
-    
-    init(sessionKey: String, filename: String, clientIP: String, clientPort: UInt16, direction: TFTPTransferDirection, fileData: Data, fileURL: URL, options: [String: String], config: TFTPServerConfig, connection: NWConnection, onUpdate: @escaping (TFTPTransferItem) -> Void, onFinish: @escaping (TFTPTransferItem) -> Void) {
-        self.sessionKey = sessionKey
+    let socket: UDPSocket
+    let peer: IPv4Peer
+    let queue = DispatchQueue(label: "com.systftp.tftp.session", qos: .userInitiated)
+    let transferID = UUID()
+    let frameGapMs: Int
+    let maxRetries: Int
+    var timeoutSeconds: Int
+    var blksize: Int
+    var fileSize: Int64
+    var blockIndex = 0
+    var retries = 0
+    var lastPacket = Data()
+    var lastLength = 0
+    var waitingForOptionAck = false
+    var finished = false
+    var reader: FileHandle?
+    var writer: FileHandle?
+    var partialURL: URL?
+    let stateLock = NSLock()
+
+    init(key: String, peer: IPv4Peer, filename: String, fileURL: URL, direction: TFTPTransferDirection, options: [String: String], config: TFTPServerConfig, onUpdate: @escaping (TFTPTransferItem) -> Void, onFinish: @escaping (TFTPTransferItem) -> Void) throws {
+        self.key = key
+        self.peer = peer
         self.filename = filename
-        self.clientIP = clientIP
-        self.clientPort = clientPort
-        self.direction = direction
-        self.fileData = fileData
         self.fileURL = fileURL
-        self.options = options
-        self.config = config
-        self.connection = connection
+        self.direction = direction
         self.onUpdate = onUpdate
         self.onFinish = onFinish
-        
-        if let optBlk = options["blksize"], let b = Int(optBlk), b >= 8 && b <= 65464 {
-            self.blksize = b
+        self.frameGapMs = max(0, config.frameGapMs)
+        self.maxRetries = max(0, config.maxRetries)
+        self.timeoutSeconds = min(255, max(1, config.timeoutSeconds))
+        self.blksize = 512
+        socket = try UDPSocket(port: 0)
+        if direction == .download {
+            let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            fileSize = (attrs[.size] as? NSNumber)?.int64Value ?? 0
+            reader = try FileHandle(forReadingFrom: fileURL)
+        } else {
+            fileSize = Int64(options["tsize"] ?? "") ?? 0
+            let partial = fileURL.appendingPathExtension("part")
+            partialURL = partial
+            FileManager.default.createFile(atPath: partial.path, contents: nil)
+            writer = try FileHandle(forWritingTo: partial)
         }
-        if let optTimeout = options["timeout"], let t = Int(optTimeout), t >= 1 && t <= 255 {
-            self.timeoutSeconds = t
+        let accepted = TFTPPackets.acceptedOptions(options, fileSize: fileSize, isRead: direction == .download)
+        if !accepted.isEmpty {
+            blksize = TFTPPackets.blksize(in: accepted, fallback: blksize)
+            timeoutSeconds = TFTPPackets.timeout(in: accepted, fallback: timeoutSeconds)
+            waitingForOptionAck = direction == .download
+            lastPacket = TFTPPackets.oack(accepted)
         }
     }
-    
+
+    func start() {
+        guard !isFinished else { return }
+        publish(.inProgress)
+        queue.async { [weak self] in self?.run() }
+    }
+
     func cancel() {
-        isCancelled = true
-        connection.cancel()
+        complete(.aborted, message: "已取消")
     }
-    
-    func startReadTransfer() {
-        totalBytes = Int64(fileData.count)
-        
-        // Check if options negotiation is requested
-        if !options.isEmpty {
-            sendOACK(isRead: true)
-        } else {
-            currentBlock = 1
-            sendNextDataBlock()
-        }
-    }
-    
-    func startWriteTransfer(expectedSize: Int64?) {
-        totalBytes = expectedSize
-        if !options.isEmpty {
-            sendOACK(isRead: false)
-        } else {
-            sendAck(blockNum: 0)
-        }
-    }
-    
-    private func sendOACK(isRead: Bool) {
-        var oack = Data([0x00, 0x06]) // Opcode 6
-        if options["blksize"] != nil {
-            appendOption(to: &oack, name: "blksize", value: "\(blksize)")
-        }
-        if options["timeout"] != nil {
-            appendOption(to: &oack, name: "timeout", value: "\(timeoutSeconds)")
-        }
-        if options["tsize"] != nil {
-            let size = isRead ? fileData.count : 0
-            appendOption(to: &oack, name: "tsize", value: "\(size)")
-        }
-        
-        connection.send(content: oack, completion: .contentProcessed { [weak self] error in
-            if error != nil {
-                self?.fail(message: "发送 OACK 失败")
+
+    private func run() {
+        if isFinished { return }
+        if !waitingForOptionAck && lastPacket.isEmpty {
+            if direction == .download {
+                guard sendBlock(index: 0) else { return }
+            } else {
+                send(TFTPPackets.ack(0))
             }
-        })
-    }
-    
-    private func appendOption(to data: inout Data, name: String, value: String) {
-        if let n = name.data(using: .utf8), let v = value.data(using: .utf8) {
-            data.append(n)
-            data.append(0x00)
-            data.append(v)
-            data.append(0x00)
+        } else if !lastPacket.isEmpty {
+            transmit(lastPacket, pacing: false)
+        }
+        while !isFinished {
+            guard let (data, from) = socket.receive(timeout: TimeInterval(timeoutSeconds)) else {
+                if isFinished { return }
+                timedOut()
+                continue
+            }
+            guard from == peer, !isFinished else { continue }
+            handle(data)
         }
     }
-    
-    func handleAckPacket(data: Data) {
-        guard data.count >= 4 else { return }
-        let ackBlock = UInt16(data[2]) << 8 | UInt16(data[3])
-        
-        if ackBlock == 0 && currentBlock == 0 {
-            // OACK acknowledged! Send block 1
-            currentBlock = 1
-            sendNextDataBlock()
+
+    private func handle(_ data: Data) {
+        guard let opcode = TFTPPackets.opcode(of: data) else { return }
+        switch opcode {
+        case 3: handleData(data)
+        case 4: handleAck(data)
+        case 5: complete(.failed, message: TFTPPackets.errorMessage(data))
+        default: break
+        }
+    }
+
+    private func handleAck(_ data: Data) {
+        guard let ack = TFTPPackets.block(of: data) else { return }
+        if waitingForOptionAck && ack == 0 {
+            waitingForOptionAck = false
+            retries = 0
+            _ = sendBlock(index: 0)
             return
         }
-        
-        if ackBlock == currentBlock {
-            bytesTransferred = min(Int64(fileData.count), Int64(currentBlock) * Int64(blksize))
-            updateProgress()
-            
-            // Check if transfer finished
-            let offset = Int(currentBlock - 1) * blksize
-            if offset + blksize >= fileData.count {
-                // Done!
-                finishSuccess()
+        guard ack == TFTPBlocks.number(forIndex: blockIndex) else { return }
+        retries = 0
+        if lastLength < blksize {
+            complete(.completed, message: nil)
+            return
+        }
+        blockIndex += 1
+        _ = sendBlock(index: blockIndex)
+    }
+
+    private func handleData(_ data: Data) {
+        guard direction == .upload, let block = TFTPPackets.block(of: data) else { return }
+        let payload = TFTPPackets.payload(of: data)
+        if payload.count > blksize {
+            send(TFTPPackets.error(code: 4, message: "Illegal TFTP operation"))
+            complete(.failed, message: "数据块超过协商大小")
+            return
+        }
+        let expected = TFTPBlocks.number(forIndex: blockIndex)
+        if block == expected {
+            do {
+                try writer?.write(contentsOf: payload)
+            } catch {
+                send(TFTPPackets.error(code: 3, message: "Disk full or allocation exceeded"))
+                complete(.failed, message: "保存文件失败：\(error.localizedDescription)")
                 return
             }
-            
-            // Increment block with 16-bit rollover support
-            currentBlock = (currentBlock == 65535) ? 0 : (currentBlock + 1)
-            sendNextDataBlock()
-        }
-    }
-    
-    func handleDataPacket(data: Data) {
-        guard data.count >= 4 else { return }
-        let blockNum = UInt16(data[2]) << 8 | UInt16(data[3])
-        let payload = data.subdata(in: 4..<data.count)
-        
-        let expectedBlock = (currentBlock == 65535) ? 0 : (currentBlock + 1)
-        if blockNum == expectedBlock {
-            currentBlock = blockNum
-            fileData.append(payload)
-            bytesTransferred += Int64(payload.count)
-            updateProgress()
-            
-            sendAck(blockNum: currentBlock)
-            
-            // If payload < blksize, transfer is complete
+            fileSize = Int64(blockIndex) * Int64(blksize) + Int64(payload.count)
+            retries = 0
+            send(TFTPPackets.ack(block))
+            publish(.inProgress)
             if payload.count < blksize {
-                do {
-                    try fileData.write(to: fileURL)
-                    finishSuccess()
-                } catch {
-                    fail(message: "保存文件失败：\(error.localizedDescription)")
+                complete(.completed, message: nil)
+            } else {
+                blockIndex += 1
+            }
+            return
+        }
+        if blockIndex > 0 && block == TFTPBlocks.number(forIndex: blockIndex - 1) {
+            transmit(lastPacket, pacing: false)
+        }
+    }
+
+    @discardableResult
+    private func sendBlock(index: Int) -> Bool {
+        guard let length = TFTPBlocks.length(fileSize: fileSize, index: index, blksize: blksize) else {
+            complete(.completed, message: nil)
+            return false
+        }
+        do {
+            let payload: Data
+            if length == 0 {
+                payload = Data()
+            } else {
+                try reader?.seek(toOffset: UInt64(index) * UInt64(blksize))
+                payload = try TFTPFiles.read(reader, count: length)
+            }
+            guard payload.count == length else {
+                complete(.failed, message: "读取文件失败：文件在传输中被截断")
+                return false
+            }
+            lastLength = payload.count
+            blockIndex = index
+            send(TFTPPackets.data(block: TFTPBlocks.number(forIndex: index), payload: payload), pacing: true)
+            publish(.inProgress)
+            return true
+        } catch {
+            complete(.failed, message: "读取文件失败：\(error.localizedDescription)")
+            return false
+        }
+    }
+
+    private func send(_ packet: Data, pacing: Bool = false) {
+        lastPacket = packet
+        transmit(packet, pacing: pacing)
+    }
+
+    private func transmit(_ packet: Data, pacing: Bool) {
+        // Each transfer waits on its own queue, so a slow client cannot stall the listener.
+        if pacing && frameGapMs > 0 {
+            Thread.sleep(forTimeInterval: Double(frameGapMs) / 1000)
+        }
+        try? socket.send(packet, to: peer)
+    }
+
+    private func timedOut() {
+        retries += 1
+        if retries > maxRetries {
+            complete(.failed, message: "等待客户端响应超时")
+            return
+        }
+        transmit(lastPacket, pacing: false)
+    }
+
+    private var isFinished: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return finished
+    }
+
+    private func publish(_ status: TFTPTransferStatus) {
+        let sent: Int64
+        if direction == .download {
+            sent = min(fileSize, Int64(blockIndex) * Int64(blksize) + Int64(lastLength == blksize && status == .inProgress ? 0 : lastLength))
+        } else {
+            sent = fileSize
+        }
+        onUpdate(item(status: status, bytes: max(0, sent), message: nil))
+    }
+
+    private func complete(_ status: TFTPTransferStatus, message: String?) {
+        stateLock.lock()
+        if finished {
+            stateLock.unlock()
+            return
+        }
+        finished = true
+        stateLock.unlock()
+        socket.close()
+        try? reader?.close()
+        try? writer?.close()
+        reader = nil
+        writer = nil
+        if status == .completed, let partialURL {
+            do {
+                if FileManager.default.fileExists(atPath: fileURL.path) {
+                    _ = try FileManager.default.replaceItemAt(fileURL, withItemAt: partialURL)
+                } else {
+                    try FileManager.default.moveItem(at: partialURL, to: fileURL)
                 }
+            } catch {
+                try? FileManager.default.removeItem(at: partialURL)
+                onFinish(item(status: .failed, bytes: fileSize, message: "保存文件失败：\(error.localizedDescription)"))
+                return
             }
-        } else if blockNum == currentBlock {
-            // Duplicate packet, re-ack
-            sendAck(blockNum: currentBlock)
+        } else if let partialURL {
+            try? FileManager.default.removeItem(at: partialURL)
         }
+        let bytes = status == .completed && direction == .download ? fileSize : fileSize
+        onFinish(item(status: status, bytes: bytes, message: message))
     }
-    
-    private func sendNextDataBlock() {
-        guard !isCancelled else { return }
-        let offset = Int(currentBlock - 1) * blksize
-        guard offset < fileData.count else { return }
-        let end = min(offset + blksize, fileData.count)
-        let chunk = fileData.subdata(in: offset..<end)
-        
-        var packet = Data([0x00, 0x03, UInt8(currentBlock >> 8), UInt8(currentBlock & 0xFF)])
-        packet.append(chunk)
-        
-        if config.frameGapMs > 0 {
-            Thread.sleep(forTimeInterval: Double(config.frameGapMs) / 1000.0)
-        }
-        
-        connection.send(content: packet, completion: .contentProcessed { [weak self] error in
-            if let error = error {
-                self?.fail(message: "发送 DATA 失败：\(error.localizedDescription)")
-            }
-        })
-    }
-    
-    private func sendAck(blockNum: UInt16) {
-        let ack = Data([0x00, 0x04, UInt8(blockNum >> 8), UInt8(blockNum & 0xFF)])
-        connection.send(content: ack, completion: .contentProcessed { [weak self] error in
-            if let error = error {
-                self?.fail(message: "发送 ACK 失败：\(error.localizedDescription)")
-            }
-        })
-    }
-    
-    private func updateProgress() {
-        let item = TFTPTransferItem(
+
+    private func item(status: TFTPTransferStatus, bytes: Int64, message: String?) -> TFTPTransferItem {
+        let parts = key.split(separator: ":")
+        let ip = parts.first.map(String.init) ?? key
+        let port = UInt16(parts.last ?? "0") ?? 0
+        return TFTPTransferItem(
+            id: transferID,
             filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
+            clientIP: ip,
+            clientPort: port,
             direction: direction,
-            bytesTransferred: bytesTransferred,
-            totalBytes: totalBytes,
-            status: .inProgress
-        )
-        onUpdate(item)
-    }
-    
-    private func finishSuccess() {
-        let item = TFTPTransferItem(
-            filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
-            direction: direction,
-            bytesTransferred: bytesTransferred,
-            totalBytes: totalBytes ?? bytesTransferred,
-            status: .completed,
-            endTime: Date()
-        )
-        onFinish(item)
-        connection.cancel()
-    }
-    
-    private func fail(message: String) {
-        let item = TFTPTransferItem(
-            filename: filename,
-            clientIP: clientIP,
-            clientPort: clientPort,
-            direction: direction,
-            bytesTransferred: bytesTransferred,
-            totalBytes: totalBytes,
-            status: .failed,
+            bytesTransferred: bytes,
+            totalBytes: direction == .download ? fileSize : (fileSize > 0 ? fileSize : nil),
+            status: status,
             errorMessage: message,
-            endTime: Date()
+            endTime: status == .inProgress ? nil : Date()
         )
-        onFinish(item)
-        connection.cancel()
     }
 }

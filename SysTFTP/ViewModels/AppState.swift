@@ -48,22 +48,10 @@ public final class AppState: ObservableObject {
     @Published public var isSyslogServerRunning: Bool = false
     
     // Configurations
-    @Published public var tftpServerConfig = TFTPServerConfig() {
-        didSet {
-            if oldValue.port != tftpServerConfig.port { defaults.set(tftpServerConfig.port, forKey: "ports.tftp") }
-        }
-    }
-    @Published public var tftpClientConfig = TFTPClientConfig()
-    @Published public var ftpServerConfig = FTPServerConfig() {
-        didSet {
-            if oldValue.port != ftpServerConfig.port { defaults.set(ftpServerConfig.port, forKey: "ports.ftp") }
-        }
-    }
-    @Published public var syslogConfig = SyslogConfig() {
-        didSet {
-            if oldValue.port != syslogConfig.port { defaults.set(syslogConfig.port, forKey: "ports.syslog") }
-        }
-    }
+    @Published public var tftpServerConfig = TFTPServerConfig() { didSet { commitTFTPConfig(previousPort: oldValue.port) } }
+    @Published public var tftpClientConfig = TFTPClientConfig() { didSet { if !applyingConfig { persistConfigs() } } }
+    @Published public var ftpServerConfig = FTPServerConfig() { didSet { commitFTPConfig(previousPort: oldValue.port) } }
+    @Published public var syslogConfig = SyslogConfig() { didSet { commitSyslogConfig(previousPort: oldValue.port) } }
     
     // Data collections
     @Published public var tftpTransfers: [TFTPTransferItem] = []
@@ -95,6 +83,7 @@ public final class AppState: ObservableObject {
     private let defaults: UserDefaults
     private let maxLogCount = 1000
     private let maxSyslogCount = 2000
+    private var applyingConfig = false
     
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -147,6 +136,8 @@ public final class AppState: ObservableObject {
     public func toggleFTPServer() {
         if isFTPServerRunning {
             ftpServerService.stop()
+        } else if ftpServerConfig.blocksStartup {
+            appendFTPLog("请先为已启用的用户设置密码，再启动 FTP。")
         } else {
             ftpServerService.updateConfig(ftpServerConfig)
             do {
@@ -231,13 +222,88 @@ public final class AppState: ObservableObject {
         syslogMessages.removeAll()
     }
     
+    private func commitTFTPConfig(previousPort: Int) {
+        guard !applyingConfig else { return }
+        if isTFTPServerRunning, tftpServerConfig.port != previousPort {
+            applyingConfig = true
+            tftpServerConfig.port = previousPort
+            applyingConfig = false
+            appendTFTPLog("请先停止服务，再修改端口。")
+        }
+        tftpServerService.updateConfig(tftpServerConfig)
+        persistConfigs()
+    }
+
+    private func commitFTPConfig(previousPort: Int) {
+        guard !applyingConfig else { return }
+        if isFTPServerRunning, ftpServerConfig.port != previousPort {
+            applyingConfig = true
+            ftpServerConfig.port = previousPort
+            applyingConfig = false
+            appendFTPLog("请先停止服务，再修改端口。")
+        }
+        ftpServerService.updateConfig(ftpServerConfig)
+        persistConfigs()
+    }
+
+    private func commitSyslogConfig(previousPort: Int) {
+        guard !applyingConfig else { return }
+        if isSyslogServerRunning, syslogConfig.port != previousPort {
+            applyingConfig = true
+            syslogConfig.port = previousPort
+            applyingConfig = false
+            appendGeneralLog("请先停止服务，再修改端口。")
+        }
+        syslogServerService.updateConfig(syslogConfig)
+        persistConfigs()
+    }
+
+    private func persistConfigs() {
+        var tftp = tftpServerConfig
+        tftp.isRunning = false
+        var ftp = ftpServerConfig
+        ftp.isRunning = false
+        var syslog = syslogConfig
+        syslog.isRunning = false
+        if tftpClientConfig.mode.lowercased() != "octet" {
+            tftpClientConfig.mode = "octet"
+        }
+        let stored = StoredConfigs(tftp: tftp, ftp: ftp, syslog: syslog, client: tftpClientConfig)
+        if let data = try? JSONEncoder().encode(stored) {
+            defaults.set(data, forKey: "config.bundle")
+        }
+        defaults.set(tftp.port, forKey: "ports.tftp")
+        defaults.set(ftp.port, forKey: "ports.ftp")
+        defaults.set(syslog.port, forKey: "ports.syslog")
+    }
+
     private func loadConfigs() {
+        applyingConfig = true
+        if let data = defaults.data(forKey: "config.bundle"),
+           let stored = try? JSONDecoder().decode(StoredConfigs.self, from: data) {
+            var tftp = stored.tftp
+            tftp.isRunning = false
+            var ftp = stored.ftp
+            ftp.isRunning = false
+            var syslog = stored.syslog
+            syslog.isRunning = false
+            var client = stored.client
+            if client.mode.lowercased() != "octet" { client.mode = "octet" }
+            tftpServerConfig = tftp
+            ftpServerConfig = ftp
+            syslogConfig = syslog
+            tftpClientConfig = client
+        }
         let tftp = defaults.integer(forKey: "ports.tftp")
         let ftp = defaults.integer(forKey: "ports.ftp")
         let syslog = defaults.integer(forKey: "ports.syslog")
         if (1...65535).contains(tftp) { tftpServerConfig.port = tftp }
         if (1...65535).contains(ftp) { ftpServerConfig.port = ftp }
         if (1...65535).contains(syslog) { syslogConfig.port = syslog }
+        applyingConfig = false
+        tftpServerService.updateConfig(tftpServerConfig)
+        ftpServerService.updateConfig(ftpServerConfig)
+        syslogServerService.updateConfig(syslogConfig)
     }
 }
 
@@ -330,11 +396,11 @@ extension AppState: FTPServerDelegate {
 }
 
 extension AppState: SyslogServerDelegate {
-    public nonisolated func syslogServerDidReceive(message: SyslogMessage) {
+    public nonisolated func syslogServerDidReceive(messages: [SyslogMessage]) {
         Task { @MainActor in
-            self.syslogMessages.insert(message, at: 0)
+            self.syslogMessages.insert(contentsOf: messages.reversed(), at: 0)
             if self.syslogMessages.count > self.maxSyslogCount {
-                self.syslogMessages.removeLast()
+                self.syslogMessages.removeLast(self.syslogMessages.count - self.maxSyslogCount)
             }
         }
     }
@@ -351,4 +417,11 @@ extension AppState: SyslogServerDelegate {
             self.syslogConfig.isRunning = isRunning
         }
     }
+}
+
+private struct StoredConfigs: Codable {
+    var tftp: TFTPServerConfig
+    var ftp: FTPServerConfig
+    var syslog: SyslogConfig
+    var client: TFTPClientConfig
 }

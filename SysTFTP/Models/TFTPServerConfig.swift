@@ -53,13 +53,12 @@ public struct TFTPTransferItem: Identifiable, Equatable {
         guard let total = totalBytes, total > 0 else { return 0 }
         return min(1.0, Double(bytesTransferred) / Double(total))
     }
-    public var speedBytesPerSec: Double
     public var status: TFTPTransferStatus
     public var errorMessage: String?
     public let startTime: Date
     public var endTime: Date?
     
-    public init(id: UUID = UUID(), filename: String, clientIP: String, clientPort: UInt16, direction: TFTPTransferDirection, bytesTransferred: Int64 = 0, totalBytes: Int64? = nil, speedBytesPerSec: Double = 0, status: TFTPTransferStatus = .inProgress, errorMessage: String? = nil, startTime: Date = Date(), endTime: Date? = nil) {
+    public init(id: UUID = UUID(), filename: String, clientIP: String, clientPort: UInt16, direction: TFTPTransferDirection, bytesTransferred: Int64 = 0, totalBytes: Int64? = nil, status: TFTPTransferStatus = .inProgress, errorMessage: String? = nil, startTime: Date = Date(), endTime: Date? = nil) {
         self.id = id
         self.filename = filename
         self.clientIP = clientIP
@@ -67,7 +66,6 @@ public struct TFTPTransferItem: Identifiable, Equatable {
         self.direction = direction
         self.bytesTransferred = bytesTransferred
         self.totalBytes = totalBytes
-        self.speedBytesPerSec = speedBytesPerSec
         self.status = status
         self.errorMessage = errorMessage
         self.startTime = startTime

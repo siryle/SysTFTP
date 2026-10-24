@@ -43,7 +43,9 @@ public struct NetworkBadgeView: View {
     public init() {}
 
     private var primaryInterface: NetworkInterfaceInfo? {
-        networkMonitor.interfaces.first(where: { !$0.isLoopback }) ?? networkMonitor.interfaces.first
+        networkMonitor.interfaces.first(where: { $0.ipAddress == networkMonitor.primaryIP && !$0.isLoopback })
+            ?? networkMonitor.interfaces.first(where: { !$0.isLoopback })
+            ?? networkMonitor.interfaces.first
     }
 
     public var body: some View {

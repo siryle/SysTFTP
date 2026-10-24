@@ -181,10 +181,18 @@ public struct SyslogMessage: Identifiable, Equatable {
     }
     
     public var formattedTimestamp: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: timestamp)
+        Self.formatterLock.lock()
+        defer { Self.formatterLock.unlock() }
+        return Self.formatter.string(from: timestamp)
     }
+
+    private static let formatterLock = NSLock()
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return formatter
+    }()
 }
 
 public struct SyslogConfig: Codable, Equatable {
@@ -192,7 +200,6 @@ public struct SyslogConfig: Codable, Equatable {
     public var logDirectory: String = (FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("SysTFTP/Syslog").path) ?? "/tmp/SysTFTP/Syslog"
     public var saveToFile: Bool = true
     public var rotateDaily: Bool = true // Daily rotation Month-Day-Year.syslog.log as in 3CDaemon
-    public var filterIP: String = ""
     public var isRunning: Bool = false
     
     public init() {}

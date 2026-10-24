@@ -91,14 +91,6 @@ public struct TFTPClientView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                 }
-                FormFieldView(title: "传输模式") {
-                    Picker("传输模式", selection: $appState.tftpClientConfig.mode) {
-                        Text("二进制（Octet）").tag("octet")
-                        Text("文本（NetASCII）").tag("netascii")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
             }
 
             FormFieldView(title: "远程文件名") {

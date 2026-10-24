@@ -4,7 +4,7 @@ public struct TFTPClientConfig: Codable, Equatable {
     public var serverHost: String = "192.168.1.1"
     public var serverPort: Int = 69
     public var isUpload: Bool = false
-    public var mode: String = "octet" // "octet" or "netascii"
+    public var mode: String = "octet"
     public var localFilePath: String = ""
     public var remoteFilePath: String = "firmware.bin"
     

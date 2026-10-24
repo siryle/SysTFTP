@@ -73,6 +73,7 @@ public final class FTPServerService {
     }
     
     public func stop() {
+        let wasRunning = listener != nil
         listener?.cancel()
         listener = nil
         
@@ -84,6 +85,7 @@ public final class FTPServerService {
         // Disconnect callbacks also acquire sessionLock.
         for session in sessions { session.disconnect() }
         
+        guard wasRunning else { return }
         delegate?.ftpServerDidLog("FTP 服务已停止。", isError: false)
         delegate?.ftpServerStatusChanged(isRunning: false, port: config.port)
     }
@@ -134,12 +136,12 @@ private final class FTPClientSession {
     let onSessionUpdate: (FTPSessionInfo) -> Void
     let onDisconnect: (UUID) -> Void
     
+    private let queueKey = DispatchSpecificKey<UInt8>()
     private let queue = DispatchQueue(label: "com.systftp.ftp.session", qos: .default)
     private var currentUser: FTPUser?
     private var pendingUsername: String?
     private var currentVirtualDir: String = "/"
     private var currentActualPath: String = ""
-    private var isBinaryMode = true
     private var renameFromPath: String?
     
     // Data connection settings
@@ -147,9 +149,12 @@ private final class FTPClientSession {
     private var passiveListener: NWListener?
     private var passiveDataConnection: NWConnection?
     private var activeDataEndpoint: (host: String, port: UInt16)?
+    private var pasvGeneration = 0
+    private var pasvAdvertised = false
+    private var dataWaiter: ((NWConnection) -> Void)?
+    private var didDisconnect = false
     
     private var lastActivityTime = Date()
-    private var inactivityTimer: Timer?
     private var buffer = Data()
     
     init(connection: NWConnection, clientIP: String, clientPort: UInt16, config: FTPServerConfig, onLog: @escaping (String, Bool) -> Void, onSessionUpdate: @escaping (FTPSessionInfo) -> Void, onDisconnect: @escaping (UUID) -> Void) {
@@ -160,6 +165,7 @@ private final class FTPClientSession {
         self.onLog = onLog
         self.onSessionUpdate = onSessionUpdate
         self.onDisconnect = onDisconnect
+        queue.setSpecific(key: queueKey, value: 1)
     }
     
     func start() {
@@ -174,7 +180,16 @@ private final class FTPClientSession {
     }
     
     func disconnect() {
-        inactivityTimer?.invalidate()
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            finish()
+        } else {
+            queue.sync(execute: finish)
+        }
+    }
+
+    private func finish() {
+        if didDisconnect { return }
+        didDisconnect = true
         passiveListener?.cancel()
         passiveDataConnection?.cancel()
         connection.cancel()
@@ -182,22 +197,32 @@ private final class FTPClientSession {
     }
     
     private func startInactivityTimer() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            self.inactivityTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
-                guard let self = self else { return }
-                if Date().timeIntervalSince(self.lastActivityTime) > Double(self.config.maxIdleTimeoutSeconds) {
-                    self.onLog("FTP 客户端 \(self.clientIP) 已断开：超过 10 分钟无活动。", false)
-                    self.sendReply("421 Timeout - session closed due to inactivity.")
-                    self.disconnect()
-                }
+        queue.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, !self.didDisconnect else { return }
+            if Date().timeIntervalSince(self.lastActivityTime) > Double(self.config.maxIdleTimeoutSeconds) {
+                self.onLog("FTP 客户端 \(self.clientIP) 已断开：超过 \(self.config.maxIdleTimeoutSeconds) 秒无活动。", false)
+                self.sendReply("421 Timeout - session closed due to inactivity.")
+                self.finish()
+                return
             }
+            self.startInactivityTimer()
         }
     }
     
     private func readCommand() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 4096) { [weak self] content, context, isComplete, error in
             guard let self = self else { return }
+            if let data = content, !data.isEmpty {
+                self.lastActivityTime = Date()
+                self.buffer.append(data)
+                if self.buffer.count > 64 * 1024 {
+                    self.sendReply("500 Command line too long.")
+                    self.disconnect()
+                    return
+                }
+                self.processBuffer()
+            }
+            if self.didDisconnect { return }
             if let error = error {
                 self.onLog("FTP 连接错误（\(self.clientIP)）：\(error.localizedDescription)", true)
                 self.disconnect()
@@ -206,11 +231,6 @@ private final class FTPClientSession {
             if isComplete {
                 self.disconnect()
                 return
-            }
-            if let data = content {
-                self.lastActivityTime = Date()
-                self.buffer.append(data)
-                self.processBuffer()
             }
             self.readCommand()
         }
@@ -253,13 +273,9 @@ private final class FTPClientSession {
             sendReply("257 \"\(currentVirtualDir)\" is current directory.")
         case "TYPE":
             if arg.uppercased() == "I" || arg.uppercased() == "L 8" {
-                isBinaryMode = true
                 sendReply("200 Type set to I (Binary).")
-            } else if arg.uppercased() == "A" {
-                isBinaryMode = false
-                sendReply("200 Type set to A (ASCII).")
             } else {
-                sendReply("504 Unsupported type.")
+                sendReply("504 Only binary mode is supported.")
             }
         case "PASV":
             handlePASV()
@@ -332,7 +348,7 @@ private final class FTPClientSession {
         
         currentUser = user
         currentVirtualDir = "/"
-        currentActualPath = user.userDirectory
+        currentActualPath = FTPPaths.resolve(root: user.userDirectory, currentVirtual: "/", requested: ".")?.actual ?? user.userDirectory
         try? FileManager.default.createDirectory(atPath: currentActualPath, withIntermediateDirectories: true)
         
         updateSessionInfo()
@@ -341,11 +357,14 @@ private final class FTPClientSession {
     }
     
     private func handleCWD(_ path: String) {
-        guard let _ = currentUser else {
+        guard currentUser != nil else {
             sendReply("530 Please login with USER and PASS.")
             return
         }
-        let resolved = resolvePath(path)
+        guard let resolved = resolvePath(path) else {
+            sendReply("550 Access denied.")
+            return
+        }
         var isDir: ObjCBool = false
         if FileManager.default.fileExists(atPath: resolved.actual, isDirectory: &isDir), isDir.boolValue {
             currentVirtualDir = resolved.virtual
@@ -356,9 +375,9 @@ private final class FTPClientSession {
             sendReply("550 Directory not found: \(path)")
         }
     }
-    
+
     private func handleCDUP() {
-        guard let _ = currentUser else {
+        guard currentUser != nil else {
             sendReply("530 Please login.")
             return
         }
@@ -368,91 +387,136 @@ private final class FTPClientSession {
         }
         let parentVirtual = (currentVirtualDir as NSString).deletingLastPathComponent
         let target = parentVirtual.isEmpty ? "/" : parentVirtual
-        let resolved = resolvePath(target)
+        guard let resolved = resolvePath(target) else {
+            sendReply("550 Access denied.")
+            return
+        }
         currentVirtualDir = resolved.virtual
         currentActualPath = resolved.actual
         updateSessionInfo()
         sendReply("250 Directory changed to \"\(currentVirtualDir)\".")
     }
-    
+
     private func handlePASV() {
         guard currentUser != nil else {
             sendReply("530 Please login.")
             return
         }
-        
         passiveListener?.cancel()
         passiveListener = nil
-        
-        // Find an available port in passive range
-        let portNum = UInt16.random(in: UInt16(config.passivePortRangeStart)...UInt16(config.passivePortRangeEnd))
-        guard let port = NWEndpoint.Port(rawValue: portNum) else {
+        passiveDataConnection = nil
+        pasvAdvertised = false
+        pasvGeneration += 1
+        let start = min(config.passivePortRangeStart, config.passivePortRangeEnd)
+        let end = max(config.passivePortRangeStart, config.passivePortRangeEnd)
+        bindPassivePort(port: start, end: end, generation: pasvGeneration)
+    }
+
+    private func bindPassivePort(port: Int, end: Int, generation: Int) {
+        guard generation == pasvGeneration else { return }
+        guard (1...65535).contains(port), port <= end, let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
             sendReply("425 Can't open passive connection.")
             return
         }
-        
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
-        
         do {
-            let plistener = try NWListener(using: params, on: port)
-            plistener.newConnectionHandler = { [weak self] dconn in
-                self?.passiveDataConnection = dconn
-                dconn.start(queue: self?.queue ?? .global())
+            let listener = try NWListener(using: params, on: nwPort)
+            listener.stateUpdateHandler = { [weak self] state in
+                guard let self, generation == self.pasvGeneration else { return }
+                switch state {
+                case .ready:
+                    guard !self.pasvAdvertised else { return }
+                    self.pasvAdvertised = true
+                    self.sendPassiveReady(port: UInt16(port))
+                case .failed:
+                    guard !self.pasvAdvertised else { return }
+                    listener.cancel()
+                    self.bindPassivePort(port: port + 1, end: end, generation: generation)
+                default:
+                    break
+                }
             }
-            plistener.start(queue: queue)
-            self.passiveListener = plistener
-            self.isPassive = true
-            
-            // Format IP and Port: (h1,h2,h3,h4,p1,p2)
-            let hostIP = NetworkMonitorService.shared.primaryIP
-            let octets = hostIP.split(separator: ".").compactMap { UInt8($0) }
-            let p1 = UInt8(portNum >> 8)
-            let p2 = UInt8(portNum & 0xFF)
-            
-            if octets.count == 4 {
-                sendReply("227 Entering Passive Mode (\(octets[0]),\(octets[1]),\(octets[2]),\(octets[3]),\(p1),\(p2))")
-            } else {
-                sendReply("227 Entering Passive Mode (127,0,0,1,\(p1),\(p2))")
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self, generation == self.pasvGeneration else {
+                    connection.cancel()
+                    return
+                }
+                connection.start(queue: self.queue)
+                if let waiter = self.dataWaiter {
+                    self.dataWaiter = nil
+                    self.passiveListener?.cancel()
+                    self.passiveListener = nil
+                    self.passiveDataConnection = nil
+                    waiter(connection)
+                    return
+                }
+                if self.passiveDataConnection == nil {
+                    self.passiveDataConnection = connection
+                    return
+                }
+                connection.cancel()
             }
+            passiveListener = listener
+            isPassive = true
+            listener.start(queue: queue)
         } catch {
-            sendReply("425 Failed to bind passive port: \(error.localizedDescription)")
+            bindPassivePort(port: port + 1, end: end, generation: generation)
         }
     }
-    
+
+    private func sendPassiveReady(port: UInt16) {
+        let octets = NetworkMonitorService.shared.currentPrimaryIP().split(separator: ".").compactMap { UInt8($0) }
+        guard octets.count == 4 else {
+            sendReply("425 No reachable IPv4 address for passive mode.")
+            return
+        }
+        let p1 = UInt8(port >> 8)
+        let p2 = UInt8(port & 0xFF)
+        sendReply("227 Entering Passive Mode (\(octets[0]),\(octets[1]),\(octets[2]),\(octets[3]),\(p1),\(p2))")
+    }
+
     private func handlePORT(_ arg: String) {
         guard currentUser != nil else {
             sendReply("530 Please login.")
             return
         }
-        let parts = arg.split(separator: ",").compactMap { UInt16($0) }
-        guard parts.count == 6 else {
+        guard let parsed = FTPPorts.parse(arg) else {
             sendReply("501 Syntax error in PORT parameters.")
             return
         }
-        let host = "\(parts[0]).\(parts[1]).\(parts[2]).\(parts[3])"
-        let port = (parts[4] << 8) | parts[5]
-        self.activeDataEndpoint = (host, port)
-        self.isPassive = false
+        guard FTPPorts.allows(clientIP: connectedHost(), host: parsed.host) else {
+            sendReply("504 PORT to a different host is not allowed.")
+            return
+        }
+        activeDataEndpoint = parsed
+        isPassive = false
         sendReply("200 PORT command successful.")
     }
-    
+
     private func handleLIST(isNlst: Bool, arg: String) {
         guard currentUser != nil else {
             sendReply("530 Please login.")
             return
         }
-        
-        let targetDir = arg.isEmpty ? currentActualPath : resolvePath(arg).actual
+        let targetDir: String
+        if arg.isEmpty {
+            targetDir = currentActualPath
+        } else if let resolved = resolvePath(arg) {
+            targetDir = resolved.actual
+        } else {
+            sendReply("550 Access denied.")
+            return
+        }
         guard let items = try? FileManager.default.contentsOfDirectory(atPath: targetDir) else {
             sendReply("550 Cannot list directory.")
             return
         }
-        
+
         var listing = ""
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "MMM dd HH:mm"
-        
         for item in items.sorted() {
             if isDisallowed(item) { continue }
             let fullPath = (targetDir as NSString).appendingPathComponent(item)
@@ -460,7 +524,6 @@ private final class FTPClientSession {
             let isDirectory = (attrs[.type] as? FileAttributeType) == .typeDirectory
             let size = (attrs[.size] as? Int64) ?? 0
             let modDate = (attrs[.modificationDate] as? Date) ?? Date()
-            
             if isNlst {
                 listing += "\(item)\r\n"
             } else {
@@ -468,10 +531,9 @@ private final class FTPClientSession {
                 listing += "\(perm) 1 owner group \(size) \(formatter.string(from: modDate)) \(item)\r\n"
             }
         }
-        
         openDataConnection { [weak self] dataConn in
-            guard let self = self else { return }
-            self.sendReply("150 Opening ASCII mode data connection for file list.")
+            guard let self else { return }
+            self.sendReply("150 Opening binary mode data connection for file list.")
             let data = listing.data(using: .utf8) ?? Data()
             dataConn.send(content: data, completion: .contentProcessed { [weak self] _ in
                 dataConn.cancel()
@@ -479,7 +541,7 @@ private final class FTPClientSession {
             })
         }
     }
-    
+
     private func handleRETR(_ filename: String) {
         guard let user = currentUser else {
             sendReply("530 Please login.")
@@ -489,29 +551,48 @@ private final class FTPClientSession {
             sendReply("550 Download permission denied.")
             return
         }
-        let resolved = resolvePath(filename)
-        if isDisallowed(filename) || isDisallowed(resolved.virtual) {
+        guard let resolved = resolvePath(filename), !isDisallowed(filename), !isDisallowed(resolved.virtual) else {
             sendReply("550 Access denied: file is restricted.")
             return
         }
-        
         let fileURL = URL(fileURLWithPath: resolved.actual)
-        guard let fileData = try? Data(contentsOf: fileURL) else {
+        guard let reader = try? FileHandle(forReadingFrom: fileURL) else {
             sendReply("550 File not found or read error: \(filename)")
             return
         }
-        
+        let size = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? NSNumber)?.int64Value ?? 0
         openDataConnection { [weak self] dataConn in
-            guard let self = self else { return }
-            self.sendReply("150 Opening BINARY mode data connection for \(filename) (\(fileData.count) bytes).")
-            dataConn.send(content: fileData, completion: .contentProcessed { [weak self] _ in
-                dataConn.cancel()
-                self?.sendReply("226 Transfer complete.")
-                self?.onLog("FTP 下载完成：\(filename)（\(fileData.count) 字节）", false)
-            })
+            guard let self else { try? reader.close(); return }
+            self.sendReply("150 Opening BINARY mode data connection for \(filename) (\(size) bytes).")
+            func pump() {
+                do {
+                    let chunk = try reader.read(upToCount: 64 * 1024) ?? Data()
+                    if chunk.isEmpty {
+                        try? reader.close()
+                        dataConn.cancel()
+                        self.sendReply("226 Transfer complete.")
+                        self.onLog("FTP 下载完成：\(filename)（\(size) 字节）", false)
+                        return
+                    }
+                    dataConn.send(content: chunk, completion: .contentProcessed { error in
+                        if error != nil {
+                            try? reader.close()
+                            dataConn.cancel()
+                            self.sendReply("426 Connection closed; transfer aborted.")
+                            return
+                        }
+                        pump()
+                    })
+                } catch {
+                    try? reader.close()
+                    dataConn.cancel()
+                    self.sendReply("451 Read error: \(error.localizedDescription)")
+                }
+            }
+            pump()
         }
     }
-    
+
     private func handleSTOR(_ filename: String) {
         guard let user = currentUser else {
             sendReply("530 Please login.")
@@ -521,49 +602,75 @@ private final class FTPClientSession {
             sendReply("550 Upload permission denied.")
             return
         }
-        let resolved = resolvePath(filename)
-        if isDisallowed(filename) {
+        guard let resolved = resolvePath(filename), !isDisallowed(filename), !isDisallowed(resolved.virtual), !isUserRoot(resolved.actual) else {
             sendReply("550 Access denied: file is restricted.")
             return
         }
-        
         if FileManager.default.fileExists(atPath: resolved.actual) && !user.canOverwrite {
             sendReply("550 File already exists and overwrite permission is disabled.")
             return
         }
-        
+        let destination = URL(fileURLWithPath: resolved.actual)
+        let partial = destination.appendingPathExtension("part")
         openDataConnection { [weak self] dataConn in
-            guard let self = self else { return }
+            guard let self else { return }
+            FileManager.default.createFile(atPath: partial.path, contents: nil)
+            guard let writer = try? FileHandle(forWritingTo: partial) else {
+                self.sendReply("451 Cannot create upload file.")
+                return
+            }
             self.sendReply("150 Opening BINARY mode data connection for \(filename).")
-            
-            var receivedData = Data()
             func receiveData() {
-                dataConn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { content, _, isComplete, err in
-                    if let c = content {
-                        receivedData.append(c)
+                dataConn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { content, _, isComplete, error in
+                    if let content {
+                        do { try writer.write(contentsOf: content) }
+                        catch {
+                            try? writer.close()
+                            try? FileManager.default.removeItem(at: partial)
+                            dataConn.cancel()
+                            self.sendReply("451 Error saving uploaded file: \(error.localizedDescription)")
+                            return
+                        }
                     }
-                    if isComplete || err != nil {
+                    if error != nil {
+                        try? writer.close()
+                        try? FileManager.default.removeItem(at: partial)
+                        dataConn.cancel()
+                        self.sendReply("426 Connection closed; transfer aborted.")
+                        return
+                    }
+                    if isComplete {
+                        try? writer.close()
                         dataConn.cancel()
                         do {
-                            try receivedData.write(to: URL(fileURLWithPath: resolved.actual))
-                            self.sendReply("226 Transfer complete (\(receivedData.count) bytes).")
-                            self.onLog("FTP 上传完成：\(filename)（\(receivedData.count) 字节）", false)
+                            if FileManager.default.fileExists(atPath: destination.path) {
+                                _ = try FileManager.default.replaceItemAt(destination, withItemAt: partial)
+                            } else {
+                                try FileManager.default.moveItem(at: partial, to: destination)
+                            }
+                            let size = (try? FileManager.default.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?.int64Value ?? 0
+                            self.sendReply("226 Transfer complete (\(size) bytes).")
+                            self.onLog("FTP 上传完成：\(filename)（\(size) 字节）", false)
                         } catch {
+                            try? FileManager.default.removeItem(at: partial)
                             self.sendReply("451 Error saving uploaded file: \(error.localizedDescription)")
                         }
-                    } else {
-                        receiveData()
+                        return
                     }
+                    receiveData()
                 }
             }
             receiveData()
         }
     }
-    
+
     private func handleDELE(_ filename: String) {
         guard let user = currentUser else { sendReply("530 Please login."); return }
         guard user.canDelete else { sendReply("550 Delete permission denied."); return }
-        let resolved = resolvePath(filename)
+        guard let resolved = resolvePath(filename), !isDisallowed(resolved.virtual), !isUserRoot(resolved.actual) else {
+            sendReply("550 Access denied.")
+            return
+        }
         do {
             try FileManager.default.removeItem(atPath: resolved.actual)
             sendReply("250 File deleted successfully.")
@@ -571,11 +678,14 @@ private final class FTPClientSession {
             sendReply("550 Delete failed: \(error.localizedDescription)")
         }
     }
-    
+
     private func handleMKD(_ dir: String) {
         guard let user = currentUser else { sendReply("530 Please login."); return }
         guard user.canMkdir else { sendReply("550 Create directory permission denied."); return }
-        let resolved = resolvePath(dir)
+        guard let resolved = resolvePath(dir), !isUserRoot(resolved.actual) else {
+            sendReply("550 Access denied.")
+            return
+        }
         do {
             try FileManager.default.createDirectory(atPath: resolved.actual, withIntermediateDirectories: true)
             sendReply("257 \"\(resolved.virtual)\" created.")
@@ -583,11 +693,14 @@ private final class FTPClientSession {
             sendReply("550 Create directory failed: \(error.localizedDescription)")
         }
     }
-    
+
     private func handleRMD(_ dir: String) {
         guard let user = currentUser else { sendReply("530 Please login."); return }
         guard user.canRmdir else { sendReply("550 Remove directory permission denied."); return }
-        let resolved = resolvePath(dir)
+        guard let resolved = resolvePath(dir), !isDisallowed(resolved.virtual), !isUserRoot(resolved.actual) else {
+            sendReply("550 Access denied.")
+            return
+        }
         do {
             try FileManager.default.removeItem(atPath: resolved.actual)
             sendReply("250 Directory removed.")
@@ -595,39 +708,51 @@ private final class FTPClientSession {
             sendReply("550 Remove directory failed: \(error.localizedDescription)")
         }
     }
-    
+
     private func handleRNFR(_ filename: String) {
         guard let user = currentUser else { sendReply("530 Please login."); return }
         guard user.canRename else { sendReply("550 Rename permission denied."); return }
-        renameFromPath = resolvePath(filename).actual
+        guard let resolved = resolvePath(filename), !isUserRoot(resolved.actual) else {
+            sendReply("550 Access denied.")
+            return
+        }
+        renameFromPath = resolved.actual
         sendReply("350 Requested file action pending further information (RNTO).")
     }
-    
+
     private func handleRNTO(_ filename: String) {
         guard let from = renameFromPath else {
             sendReply("503 Bad sequence of commands: RNFR required first.")
             return
         }
-        let to = resolvePath(filename).actual
+        guard let resolved = resolvePath(filename), !isDisallowed(resolved.virtual), !isUserRoot(resolved.actual) else {
+            renameFromPath = nil
+            sendReply("550 Access denied.")
+            return
+        }
         renameFromPath = nil
         do {
-            try FileManager.default.moveItem(atPath: from, toPath: to)
+            try FileManager.default.moveItem(atPath: from, toPath: resolved.actual)
             sendReply("250 File renamed successfully.")
         } catch {
             sendReply("550 Rename failed: \(error.localizedDescription)")
         }
     }
-    
+
     private func handleSIZE(_ filename: String) {
-        let resolved = resolvePath(filename)
+        guard currentUser != nil else { sendReply("530 Please login."); return }
+        guard let resolved = resolvePath(filename), !isDisallowed(resolved.virtual) else {
+            sendReply("550 Access denied.")
+            return
+        }
         let attrs = (try? FileManager.default.attributesOfItem(atPath: resolved.actual)) ?? [:]
-        if let sz = attrs[.size] as? Int64 {
-            sendReply("213 \(sz)")
+        if let size = attrs[.size] as? Int64 {
+            sendReply("213 \(size)")
         } else {
             sendReply("550 File not found.")
         }
     }
-    
+
     private func isDisallowed(_ name: String) -> Bool {
         let n = name.lowercased()
         for d in config.disallowedFiles {
@@ -638,66 +763,75 @@ private final class FTPClientSession {
         return false
     }
     
-    private func resolvePath(_ path: String) -> (virtual: String, actual: String) {
-        guard let user = currentUser else { return ("/", "") }
-        var clean = path.trimmingCharacters(in: .whitespaces)
-        if clean.isEmpty { clean = "." }
-        
-        let root = URL(fileURLWithPath: user.userDirectory).standardized
-        let targetURL: URL
-        let virtual: String
-        
-        if clean.hasPrefix("/") {
-            // Absolute inside user chroot
-            let rel = clean.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            targetURL = root.appendingPathComponent(rel).standardized
-            virtual = "/" + rel
-        } else {
-            // Relative to current
-            let cur = (currentVirtualDir as NSString).appendingPathComponent(clean)
-            let norm = (cur as NSString).standardizingPath
-            let rel = norm.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            targetURL = root.appendingPathComponent(rel).standardized
-            virtual = "/" + rel
-        }
-        
-        // Prevent sandbox escaping (chroot)
-        if targetURL.path.hasPrefix(root.path) {
-            return (virtual, targetURL.path)
-        } else {
-            return ("/", root.path)
-        }
+    private func resolvePath(_ path: String) -> (virtual: String, actual: String)? {
+        guard let user = currentUser else { return nil }
+        return FTPPaths.resolve(root: user.userDirectory, currentVirtual: currentVirtualDir, requested: path)
+    }
+
+    private func isUserRoot(_ path: String) -> Bool {
+        guard let user = currentUser else { return false }
+        let root = FTPPaths.resolve(root: user.userDirectory, currentVirtual: "/", requested: ".")?.actual ?? user.userDirectory
+        return URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path == root
     }
     
     private func openDataConnection(completion: @escaping (NWConnection) -> Void) {
         if isPassive {
-            if let pconn = passiveDataConnection {
-                completion(pconn)
-                self.passiveDataConnection = nil
+            if let connection = passiveDataConnection {
+                passiveDataConnection = nil
+                passiveListener?.cancel()
+                passiveListener = nil
+                completion(connection)
+                return
+            }
+            let generation = pasvGeneration
+            dataWaiter = completion
+            queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+                guard let self, self.pasvGeneration == generation, self.dataWaiter != nil else { return }
+                self.dataWaiter = nil
+                self.pasvGeneration += 1
                 self.passiveListener?.cancel()
                 self.passiveListener = nil
-            } else {
-                // Wait briefly for incoming client
-                DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { [weak self] in
-                    if let pconn = self?.passiveDataConnection {
-                        completion(pconn)
-                        self?.passiveDataConnection = nil
-                        self?.passiveListener?.cancel()
-                        self?.passiveListener = nil
-                    } else {
-                        self?.sendReply("425 Can't open data connection.")
-                    }
-                }
+                self.passiveDataConnection?.cancel()
+                self.passiveDataConnection = nil
+                self.sendReply("425 Can't open data connection.")
             }
-        } else if let endpoint = activeDataEndpoint, let p = NWEndpoint.Port(rawValue: endpoint.port) {
-            let conn = NWConnection(host: NWEndpoint.Host(endpoint.host), port: p, using: .tcp)
-            conn.start(queue: queue)
-            completion(conn)
-        } else {
+            return
+        }
+        guard let endpoint = activeDataEndpoint, FTPPorts.allows(clientIP: connectedHost(), host: endpoint.host), let port = NWEndpoint.Port(rawValue: endpoint.port) else {
             sendReply("425 Use PASV or PORT first.")
+            return
+        }
+        let connection = NWConnection(host: NWEndpoint.Host(endpoint.host), port: port, using: .tcp)
+        var finished = false
+        connection.stateUpdateHandler = { [weak self] state in
+            guard !finished else { return }
+            switch state {
+            case .ready:
+                finished = true
+                completion(connection)
+            case .failed, .cancelled:
+                finished = true
+                self?.sendReply("425 Can't open data connection.")
+            default:
+                break
+            }
+        }
+        connection.start(queue: queue)
+        queue.asyncAfter(deadline: .now() + 5) { [weak self] in
+            guard !finished else { return }
+            finished = true
+            connection.cancel()
+            self?.sendReply("425 Can't open data connection.")
         }
     }
-    
+
+    private func connectedHost() -> String {
+        if case .hostPort(let host, _) = connection.endpoint {
+            return "\(host)"
+        }
+        return clientIP
+    }
+
     private func sendReply(_ reply: String) {
         let formatted = reply.hasSuffix("\r\n") ? reply : reply + "\r\n"
         if let data = formatted.data(using: .utf8) {

@@ -224,9 +224,9 @@ public struct FTPServerView: View {
     }
 
     private func savePassword() {
-        if let index = currentUserIndex {
-            appState.ftpServerConfig.users[index].passwordHash = FTPUser.hashMD5(newPasswordInput)
-        }
+        let password = newPasswordInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !password.isEmpty, let index = currentUserIndex else { return }
+        appState.ftpServerConfig.users[index].passwordHash = FTPUser.hashMD5(password)
         showingPasswordSheet = false
     }
 
@@ -235,16 +235,16 @@ public struct FTPServerView: View {
         let defaultPath = (FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("SysTFTP/FTP/\(baseName)").path) ?? "/tmp/SysTFTP/FTP/\(baseName)"
         let newUser = FTPUser(
             username: baseName,
-            password: "password123",
+            password: "",
             userDirectory: defaultPath,
-            canLogin: true,
+            canLogin: false,
             canUpload: true,
             canDownload: true,
-            canOverwrite: true,
-            canDelete: true,
-            canRename: true,
-            canMkdir: true,
-            canRmdir: true,
+            canOverwrite: false,
+            canDelete: false,
+            canRename: false,
+            canMkdir: false,
+            canRmdir: false,
             isAnonymous: false
         )
         appState.ftpServerConfig.users.append(newUser)

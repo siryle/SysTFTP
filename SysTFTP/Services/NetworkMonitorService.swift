@@ -12,10 +12,29 @@ public final class NetworkMonitorService: ObservableObject {
     @Published public var primaryIP: String = "127.0.0.1"
     
     private var timer: Timer?
+    private var preferredInterfaceName: String?
+    private let pathMonitor = NWPathMonitor()
+    private let ipLock = NSLock()
+    private var cachedPrimaryIP = "127.0.0.1"
+
+    public func currentPrimaryIP() -> String {
+        ipLock.lock()
+        defer { ipLock.unlock() }
+        return cachedPrimaryIP
+    }
     
     public init() {
-        refreshInterfaces()
-        startMonitoring()
+        let start = { [weak self] in
+            guard let self else { return }
+            self.pathMonitor.pathUpdateHandler = { [weak self] path in
+                self?.preferredInterfaceName = path.availableInterfaces.first?.name
+                self?.refreshInterfaces()
+            }
+            self.pathMonitor.start(queue: .main)
+            self.refreshInterfaces()
+            self.startMonitoring()
+        }
+        if Thread.isMainThread { start() } else { DispatchQueue.main.async(execute: start) }
     }
     
     public func startMonitoring() {
@@ -74,16 +93,22 @@ public final class NetworkMonitorService: ObservableObject {
         results.append(NetworkInterfaceInfo(name: "lo0", ipAddress: "127.0.0.1", isUp: true, isLoopback: true))
         #endif
         
-        DispatchQueue.main.async {
+        let usable = results.filter { $0.isUp && !$0.isLoopback }
+        let chosen = usable.first(where: { $0.name == self.preferredInterfaceName })
+            ?? usable.first(where: { $0.name.hasPrefix("en") })
+            ?? usable.first
+        let ip = chosen?.ipAddress ?? "127.0.0.1"
+        ipLock.lock()
+        cachedPrimaryIP = ip
+        ipLock.unlock()
+        let publish = {
             self.interfaces = results
-            // Find preferred primary IP (en0 or non-loopback)
-            if let preferred = results.first(where: { !$0.isLoopback && ($0.name.hasPrefix("en0") || $0.name.hasPrefix("en")) }) {
-                self.primaryIP = preferred.ipAddress
-            } else if let nonLoop = results.first(where: { !$0.isLoopback }) {
-                self.primaryIP = nonLoop.ipAddress
-            } else {
-                self.primaryIP = "127.0.0.1"
-            }
+            self.primaryIP = ip
+        }
+        if Thread.isMainThread {
+            publish()
+        } else {
+            DispatchQueue.main.async(execute: publish)
         }
     }
 }

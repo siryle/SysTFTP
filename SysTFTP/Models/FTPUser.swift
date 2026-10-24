@@ -58,9 +58,12 @@ public struct FTPUser: Identifiable, Codable, Equatable {
     
     public func verifyPassword(_ input: String) -> Bool {
         if isAnonymous { return true }
-        if passwordHash.isEmpty { return input.isEmpty }
-        let hashedInput = FTPUser.hashMD5(input)
-        return hashedInput.caseInsensitiveCompare(passwordHash) == .orderedSame || input == passwordHash
+        // A stored MD5 is not itself a password.
+        guard !passwordHash.isEmpty else { return false }
+        if passwordHash.count == 32, passwordHash.allSatisfy(\.isHexDigit) {
+            return FTPUser.hashMD5(input).caseInsensitiveCompare(passwordHash) == .orderedSame
+        }
+        return input == passwordHash
     }
 }
 
@@ -84,25 +87,14 @@ public struct FTPServerConfig: Codable, Equatable {
             canMkdir: false,
             canRmdir: false,
             isAnonymous: true
-        ),
-        FTPUser(
-            username: "admin",
-            password: "adminpassword",
-            userDirectory: (FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("SysTFTP/FTP/Admin").path) ?? "/tmp/SysTFTP/FTP/Admin",
-            canLogin: true,
-            canUpload: true,
-            canDownload: true,
-            canOverwrite: true,
-            canDelete: true,
-            canRename: true,
-            canMkdir: true,
-            canRmdir: true,
-            isAnonymous: false
         )
     ]
-    public var virtualDirectories: [String: String] = [:]
     public var disallowedFiles: [String] = ["3CDaemon.ini", "Profiles.ftp", ".DS_Store", "noaccess.ftp"]
     public var isRunning: Bool = false
+
+    public var blocksStartup: Bool {
+        users.contains { $0.canLogin && !$0.isAnonymous && $0.passwordHash.isEmpty }
+    }
     
     public init() {}
 }

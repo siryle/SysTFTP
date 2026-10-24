@@ -2,7 +2,7 @@ import Foundation
 import Network
 
 public protocol SyslogServerDelegate: AnyObject {
-    func syslogServerDidReceive(message: SyslogMessage)
+    func syslogServerDidReceive(messages: [SyslogMessage])
     func syslogServerDidLog(_ text: String, isError: Bool)
     func syslogServerStatusChanged(isRunning: Bool, port: Int)
 }
@@ -13,11 +13,22 @@ public final class SyslogServerService {
     private var config: SyslogConfig
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.systftp.server.syslog", qos: .userInitiated)
+    private let queueKey = DispatchSpecificKey<UInt8>()
+    private var connections: [NWConnection] = []
     private var currentLogFileHandle: FileHandle?
     private var currentLogDateString: String = ""
+    private var pendingMessages: [SyslogMessage] = []
+    private var flushScheduled = false
+    private let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
     
     public init(config: SyslogConfig = SyslogConfig()) {
         self.config = config
+        queue.setSpecific(key: queueKey, value: 1)
     }
     
     public func updateConfig(_ config: SyslogConfig) {
@@ -70,19 +81,39 @@ public final class SyslogServerService {
     }
     
     public func stop() {
+        let wasRunning = listener != nil
         listener?.cancel()
         listener = nil
-        
+        onQueue {
+            let open = self.connections
+            self.connections.removeAll()
+            open.forEach { $0.cancel() }
+            self.flushPending()
+        }
         try? currentLogFileHandle?.close()
         currentLogFileHandle = nil
         
+        guard wasRunning else { return }
         delegate?.syslogServerDidLog("Syslog 服务已停止。", isError: false)
         delegate?.syslogServerStatusChanged(isRunning: false, port: config.port)
     }
     
     private func handleIncomingConnection(_ connection: NWConnection) {
+        connections.append(connection)
+        connection.stateUpdateHandler = { [weak self] state in
+            guard let self, case .cancelled = state else { return }
+            self.connections.removeAll { $0 === connection }
+        }
         connection.start(queue: queue)
         receiveMessage(from: connection)
+    }
+
+    private func onQueue(_ work: () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil {
+            work()
+        } else {
+            queue.sync(execute: work)
+        }
     }
     
     private func receiveMessage(from connection: NWConnection) {
@@ -90,21 +121,26 @@ public final class SyslogServerService {
             guard let self = self else { return }
             
             if let error = error {
-                self.delegate?.syslogServerDidLog("Syslog 接收错误：\(error.localizedDescription)", isError: true)
+                if self.listener != nil {
+                    self.delegate?.syslogServerDidLog("Syslog 接收错误：\(error.localizedDescription)", isError: true)
+                }
                 connection.cancel()
                 return
             }
             
-            guard let data = content, !data.isEmpty else {
+            if let data = content, !data.isEmpty {
+                var clientIP = "未知"
+                if case .hostPort(let host, _) = connection.endpoint {
+                    clientIP = "\(host)"
+                }
+                self.processSyslogPacket(data: data, clientIP: clientIP)
+            }
+            // UDP sets isComplete for every datagram. That is not the end of the sender.
+            guard self.listener != nil else {
+                connection.cancel()
                 return
             }
-            
-            var clientIP = "未知"
-            if case .hostPort(let host, _) = connection.endpoint {
-                clientIP = "\(host)"
-            }
-            
-            self.processSyslogPacket(data: data, clientIP: clientIP)
+            self.receiveMessage(from: connection)
         }
     }
     
@@ -113,19 +149,31 @@ public final class SyslogServerService {
             return
         }
         
-        // Filter by IP if specified
-        if !config.filterIP.isEmpty && !clientIP.contains(config.filterIP) {
-            return
-        }
-        
         let message = parseSyslogMessage(raw: text, clientIP: clientIP)
-        delegate?.syslogServerDidReceive(message: message)
+        enqueue(message)
         
         if config.saveToFile {
             writeToFile(message: message)
         }
     }
     
+    private func enqueue(_ message: SyslogMessage) {
+        pendingMessages.append(message)
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        queue.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+            self?.flushPending()
+        }
+    }
+
+    private func flushPending() {
+        flushScheduled = false
+        let batch = pendingMessages
+        pendingMessages.removeAll(keepingCapacity: true)
+        guard !batch.isEmpty else { return }
+        delegate?.syslogServerDidReceive(messages: batch)
+    }
+
     // RFC 3164 / RFC 5424 Syslog Parser
     private func parseSyslogMessage(raw: String, clientIP: String) -> SyslogMessage {
         var pri = 13 // default: local7.notice (16 * 8 + 5 = 133 or user.notice 1 * 8 + 5 = 13)
@@ -190,10 +238,7 @@ public final class SyslogServerService {
     }
     
     private func writeToFile(message: SyslogMessage) {
-        let now = Date()
-        let dateFormatter = DateFormatter()
-        dateFormatter.dateFormat = "yyyy-MM-dd"
-        let dateStr = dateFormatter.string(from: now)
+        let dateStr = dayFormatter.string(from: Date())
         
         // Daily rotation filename check (3CDaemon Hacker Option: Month-Day-Year.syslog.log)
         let filename = config.rotateDaily ? "\(dateStr).syslog.log" : "Syslog.log"
